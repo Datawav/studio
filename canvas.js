@@ -89,15 +89,21 @@ window.Canvas = (function () {
     const out = [], lines = (o.str || "").split("\n");
     for (let li = 0; li < lines.length; li++) {
       let x = 0; const y = li * o.sizeMM * LSP;
-      for (const ch of lines[li]) {
-        const g = gseg(ch);
-        if (g) for (const s of g) out.push(mapSeg(s, ([px, py]) => {
-          let fx = px; if (o.italic) fx += ITALIC * (asc - py);
-          return [x + fx * sc, y + py * sc];
-        }));
-        x += adv * sc;
+      // *x* toggles italic and _x_ underline within a line (splitFmt, the same
+      // markup the Rich tab uses), XORed with the object's own italic/underline
+      // so the toolbar toggles and inline markup both apply.
+      for (const run of splitFmt(lines[li])) {
+        const italic = run.italic !== !!o.italic, underline = run.underline !== !!o.underline, rx0 = x;
+        for (const ch of run.text) {
+          const g = gseg(ch);
+          if (g) for (const s of g) out.push(mapSeg(s, ([px, py]) => {
+            let fx = px; if (italic) fx += ITALIC * (asc - py);
+            return [x + fx * sc, y + py * sc];
+          }));
+          x += adv * sc;
+        }
+        if (underline && x > rx0) { const uy = y + asc * sc + o.sizeMM * 0.1; out.push({ op: "M", p: [[rx0, uy]] }, { op: "L", p: [[x, uy]] }); }
       }
-      if (o.underline && x > 0) { const uy = y + asc * sc + o.sizeMM * 0.1; out.push({ op: "M", p: [[0, uy]] }, { op: "L", p: [[x, uy]] }); }
     }
     return centered(out);
   }
@@ -210,7 +216,7 @@ window.Canvas = (function () {
     drag = { kind: h === "rot" ? "rot" : "scale", o, start: p, tf0: { ...o.tf }, h, hw, hh, size0: o.sizeMM };
   }
   function startCreate(t, p, ev) {
-    if (t === "text") { commitSnapshot(); const o = mkText("Text", p); select(o.id); focusEdit(); recomputeAll(); return; }
+    if (t === "text") { commitSnapshot(); const o = mkText("Text", p); select(o.id); setTool("select"); recomputeAll(); requestAnimationFrame(focusEdit); return; }
     if (t === "poly") { addPolyVertex(p); return; }
     // rect / ellipse / line / pen: drag to size
     drag = { kind: "create", t, start: p, pts: [p] };
