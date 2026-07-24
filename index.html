@@ -242,8 +242,6 @@ button.ghost.danger:hover { border-color: var(--bad); color: var(--bad); }
     <div class="seg" role="tablist">
       <button role="tab" aria-selected="true" data-mode="text">Text</button>
       <button role="tab" aria-selected="false" data-mode="canvas">Canvas</button>
-      <button role="tab" aria-selected="false" data-mode="rich">Rich</button>
-      <button role="tab" aria-selected="false" data-mode="svg">Graphics</button>
       <button role="tab" aria-selected="false" data-mode="emu">SeedHammer</button>
     </div>
     <button class="install" id="install">Install</button>
@@ -303,34 +301,6 @@ SEEDHAMMER</textarea>
         <input type="file" id="cvSvgFile" accept=".svg,image/svg+xml" hidden>
         <input type="file" id="cvImgFile" accept="image/*" hidden>
       </div>
-      <div data-pane="rich" hidden style="flex-direction:column;flex:1">
-        <textarea id="md" spellcheck="false"># Cold Storage
-## 2 of 3 multisig
-
-Keep *offline*. Verify _keys_.
-
-| Share | Where | OK |
-| - | - | - |
-| 1 | Safe | Y |
-| 2 | Bank | N |</textarea>
-        <div class="row"><label>Body size <input type="number" id="bodyMM" value="4" min="2" max="20" step="0.5"> mm</label></div>
-        <div class="cheat">
-          <span><code># H</code> heading</span>
-          <span><code>*x*</code> italic</span>
-          <span><code>_x_</code> underline</span>
-          <span><code>| a | b |</code> + <code>| - | - |</code> table</span>
-        </div>
-      </div>
-      <div data-pane="svg" hidden style="flex-direction:column;flex:1">
-        <div class="drop" id="drop">Drop an <b>.svg</b>, or click to choose</div>
-        <input type="file" id="file" accept=".svg,image/svg+xml" hidden>
-        <textarea id="svg" spellcheck="false" placeholder="…or paste SVG markup" style="min-height:130px;margin-top:12px"></textarea>
-        <div class="row">
-          <label>Height <input type="number" id="height" value="0" min="0" max="85" step="1"> mm</label>
-          <label>Rotate <input type="number" id="rotate" value="0" step="15"> °</label>
-          <label>Pos <input type="text" id="pos" value="center"></label>
-        </div>
-      </div>
     </section>
 
     <section class="panel glass stage" data-view="editor">
@@ -364,7 +334,7 @@ Keep *offline*. Verify _keys_.
           </div>
           <p class="devhint">The real SeedHammer&nbsp;II firmware, running in your browser. Drag
             to navigate — it's a touch device. <b>Load composed plate</b> taps whatever you
-            designed on the Text, Rich, or Graphics tabs into this emulator, exactly as a scanned
+            designed on the Text or Canvas tabs into this emulator, exactly as a scanned
             NFC tag would. It never reaches a real machine — “Send” on the editor tabs does that.</p>
           <div class="platePanel" id="emuPlate" hidden>
             <div class="plateHead"><span>Engraved plate (SVG)</span><button id="emuPlateDl">Download</button></div>
@@ -494,53 +464,12 @@ function ell(cx,cy,rx,ry){if(rx<=0||ry<=0)return[];const k=.5522847498307936,ox=
   return[{op:'M',p:[[cx+rx,cy]]},{op:'C',p:[[cx+rx,cy+oy],[cx+ox,cy+ry],[cx,cy+ry]]},
     {op:'C',p:[[cx-ox,cy+ry],[cx-rx,cy+oy],[cx-rx,cy]]},{op:'C',p:[[cx-rx,cy-oy],[cx-ox,cy-ry],[cx,cy-ry]]},
     {op:'C',p:[[cx+ox,cy-ry],[cx+rx,cy-oy],[cx+rx,cy]]}];}
-function layout(segs,height,rotate,pos){
-  if(rotate){const r=rotate*Math.PI/180,c=Math.cos(r),s=Math.sin(r);segs=segs.map(g=>mapSeg(g,([x,y])=>[c*x-s*y,s*x+c*y]));}
-  const b=bounds(segs);if(b.empty)return segs;
-  let sc=height>0&&b.h>0?height/b.h:(Math.max(b.w,b.h)>0?FIT_MM/Math.max(b.w,b.h):1);
-  const sw=b.w*sc,sh=b.h*sc;let tx,ty;
-  if(pos==='center'||!pos){tx=(PLATE_MM-sw)/2-b.minX*sc;ty=(PLATE_MM-sh)/2-b.minY*sc;}
-  else{const[x,y]=pos.split(',').map(Number);tx=x-b.minX*sc;ty=y-b.minY*sc;}
-  return segs.map(g=>mapSeg(g,([x,y])=>[x*sc+tx,y*sc+ty]));
-}
-
-// ==== rich text (port of cmd/svgplate/richtext.go) ====
+// ==== glyph + inline-format helpers (shared by the text plate and canvas) ====
 const gcache={};
 function gseg(ch){if(ch in gcache)return gcache[ch];const d=SH.glyphs[ch];const s=d?parsePath(d):null;gcache[ch]=s;return s;}
-function renderMD(src,bodyMM){
-  const out=[],cellH=SH.height,asc=SH.ascent,adv=SH.advance;let penY=5;
-  const lines=src.replace(/\r\n/g,'\n').split('\n');
-  const place=(segs,x,y,sc,it)=>{const tx=([px,py])=>{let fx=px;if(it)fx+=ITALIC*(asc-py);return[x+fx*sc,y+py*sc];};for(const s of segs)out.push(mapSeg(s,tx));};
-  const runSpans=(sp,x,y,sz)=>{const sc=sz/cellH;for(const s of sp){const x0=x;
-    for(const ch of s.text){const g=gseg(ch);if(g===null){x+=adv*sc;continue;}place(g,x,y,sc,s.italic);x+=adv*sc;}
-    if(s.underline&&x>x0){const uy=y+asc*sc+sz*0.1;out.push({op:'M',p:[[x0,uy]]},{op:'L',p:[[x,uy]]});}}return x;};
-  const meas=(t,sc)=>{let w=0;for(const ch of t)w+=adv*sc;return w;};
-  for(let li=0;li<lines.length;li++){let line=lines[li];
-    if(line.trim()===''){penY+=bodyMM*LSP*.6;continue;}
-    if(line.includes('|')&&li+1<lines.length&&isSep(lines[li+1])){
-      const block=[line];let j=li+1;while(j<lines.length&&lines[j].includes('|')){block.push(lines[j]);j++;}
-      penY=table(block,penY,bodyMM,cellH,runSpans,meas,out);li=j-1;continue;}
-    let sz=bodyMM;const h=header(line);if(h){sz=bodyMM*HSCALE[h.lvl];line=h.text;}
-    runSpans(splitFmt(line),5,penY,sz);penY+=sz*LSP;}
-  return out;
-}
-function table(block,y0,bodyMM,cellH,runSpans,meas,out){
-  const sc=bodyMM/cellH,rows=[];block.forEach((l,i)=>{if(i===1&&isSep(l))return;rows.push(cells(l));});
-  let cols=0;rows.forEach(r=>cols=Math.max(cols,r.length));const W=new Array(cols).fill(0);
-  rows.forEach(r=>r.forEach((c,ci)=>{const w=meas(c.trim(),sc)+2*CPAD;if(w>W[ci])W[ci]=w;}));
-  const rowH=bodyMM*LSP+2*RPAD,x0=5,tw=W.reduce((a,b)=>a+b,0),th=rowH*rows.length;
-  const hl=(xa,xb,y)=>out.push({op:'M',p:[[xa,y]]},{op:'L',p:[[xb,y]]});
-  const vl=(ya,yb,x)=>out.push({op:'M',p:[[x,ya]]},{op:'L',p:[[x,yb]]});
-  for(let r=0;r<=rows.length;r++)hl(x0,x0+tw,y0+r*rowH);
-  let x=x0;vl(y0,y0+th,x);for(const w of W){x+=w;vl(y0,y0+th,x);}
-  rows.forEach((row,ri)=>{let cx=x0;for(let ci=0;ci<cols;ci++){const c=ci<row.length?row[ci].trim():'';runSpans(splitFmt(c),cx+CPAD,y0+ri*rowH+RPAD,bodyMM);cx+=W[ci];}});
-  return y0+th+bodyMM*LSP*.5;
-}
-function header(l){for(let n=3;n>=1;n--){const p='#'.repeat(n)+' ';if(l.startsWith(p))return{lvl:n,text:l.slice(p.length).trim()};}return null;}
+// *x* toggles italic, _x_ underline; splits a line into styled runs.
 function splitFmt(t){const sp=[];let b='',it=false,un=false;const f=()=>{if(b){sp.push({text:b,italic:it,underline:un});b='';}};
   for(const ch of t){if(ch==='*'){f();it=!it;}else if(ch==='_'){f();un=!un;}else b+=ch;}f();return sp.length?sp:[{text:'',italic:false,underline:false}];}
-function isSep(l){if(!l.includes('|')||!l.includes('-'))return false;return cells(l).every(c=>{c=c.trim();return c===''||/^[-:]+$/.test(c);});}
-function cells(l){l=l.trim().replace(/^\|/,'').replace(/\|$/,'');return l.split('|');}
 
 // ==== text plate (port of the firmware grid model) ====
 const allowed=new Set(Object.keys(SH.glyphs));
@@ -632,9 +561,9 @@ function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,
 
 // ==== app state ====
 let payload=null, ok=false, sendKind='path';
-// Text/Rich/Graphics compose a payload; SeedHammer is a device tab that
+// Text/Canvas compose a payload; SeedHammer is a device tab that
 // consumes the last composed payload rather than editing it.
-const EDITOR_MODES=['text','canvas','rich','svg'];
+const EDITOR_MODES=['text','canvas'];
 function mode(){return document.querySelector('[role=tab][aria-selected=true]').dataset.mode;}
 function recompute(){
   const m=mode();
@@ -666,16 +595,6 @@ function recompute(){
       const collectText=list=>list.flatMap(o=>o.type==='text'?[o.str||'']:(o.type==='group'?collectText(o.children||[]):[]));
       err=charErr(collectText(objs).join('\n'))||null;
       const ce=document.getElementById('cvEdit');if(ce)ce.classList.toggle('bad',!!charErr(ce.value));
-    } else if(m==='rich'){
-      segs=renderMD(document.getElementById('md').value,parseFloat(document.getElementById('bodyMM').value)||5);
-      sendKind='path'; payload=encodePath(segs);
-      err=charErr(document.getElementById('md').value)||null;
-      document.getElementById('md').classList.toggle('bad',!!err);
-    } else {
-      const t=document.getElementById('svg').value.trim();
-      if(t){segs=layout(extractSVG(t),parseFloat(document.getElementById('height').value)||0,
-        parseFloat(document.getElementById('rotate').value)||0,document.getElementById('pos').value.trim());}
-      sendKind='path'; payload=encodePath(segs);
     }
   }catch(e){err=String(e.message||e);segs=[];payload=null;}
   const gridCtx=m==='text'?(tSize||SH.sizes[SH.sizes.length-1]):null;
@@ -750,7 +669,7 @@ function selectTab(m){
   });
   if(editing){
     document.querySelectorAll('[data-pane]').forEach(p=>{p.hidden=p.dataset.pane!==m;p.style.display=p.hidden?'none':'flex';});
-    document.getElementById('editorTitle').textContent={text:'Text plate',canvas:'Canvas',rich:'Rich text',svg:'Graphics'}[m];
+    document.getElementById('editorTitle').textContent={text:'Text plate',canvas:'Canvas'}[m];
     // the cell grid is a text-plate concept; hide the toggle elsewhere
     document.getElementById('gridChip').style.display=m==='text'?'inline-flex':'none';
     recompute();
@@ -761,14 +680,8 @@ function selectTab(m){
   }
 }
 document.querySelectorAll('[role=tab]').forEach(t=>t.onclick=()=>selectTab(t.dataset.mode));
-['text','md','bodyMM','svg','height','rotate','pos'].forEach(id=>document.getElementById(id).addEventListener('input',recompute));
+document.getElementById('text').addEventListener('input',recompute);
 document.getElementById('grid').addEventListener('change',recompute);
-const drop=document.getElementById('drop'),file=document.getElementById('file');
-drop.onclick=()=>file.click();
-file.onchange=e=>{const f=e.target.files[0];if(f)f.text().then(t=>{document.getElementById('svg').value=t;recompute();});};
-['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
-['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
-drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)f.text().then(t=>{document.getElementById('svg').value=t;recompute();});});
 document.getElementById('emuFeed').onclick=()=>window.SeedHammerEmu.feed(payload);
 document.getElementById('copy').onclick=async()=>{if(!payload)return;await navigator.clipboard.writeText(sendKind==='text'?new TextDecoder().decode(payload):b64(payload));status('Copied ✓');};
 document.getElementById('download').onclick=()=>{if(!payload)return;const a=document.createElement('a');
