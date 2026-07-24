@@ -37,7 +37,7 @@ jobs:
       # together (and re-verify emu + core still build) when the gui or curves
       # API they use changes. See emu/README.md.
       FIRMWARE_REPO: Gangleri42/seedhammer
-      FIRMWARE_REF: 997792abbb4863308aadb7bd0a46d6f73d1c931a
+      FIRMWARE_REF: 88e62e8e019a680fe88d1a2f127cd6a61e0bfddc
     steps:
       - uses: actions/checkout@v6
 
