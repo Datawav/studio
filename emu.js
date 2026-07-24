@@ -135,11 +135,20 @@
     }
   }
 
+  // The payload is bytes (a fresh Uint8Array per recompute), so the
+  // skip-redundant-retap check must compare content, not identity.
+  function sameFeed(a, b) {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
   function queueOrFeed(payload, always) {
     if (state === "error") state = "idle";
     if (state === "idle") { pending = payload; boot(); return; }
     if (state === "booting") { pending = payload; return; }
-    if (always || payload !== lastFed) doFeed(payload);
+    if (always || !sameFeed(payload, lastFed)) doFeed(payload);
   }
 
   // activate: called when the SeedHammer tab opens from an editor tab. Boots on

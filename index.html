@@ -556,6 +556,24 @@ function emit(segs){const q=v=>Math.round(v*UPMM);let s=`${SH.version} path ${UP
     else if(g.op==='Q')s+=`Q${q(p[0][0])} ${q(p[0][1])} ${q(p[1][0])} ${q(p[1][1])} `;
     else if(g.op==='C')s+=`C${q(p[0][0])} ${q(p[0][1])} ${q(p[1][0])} ${q(p[1][1])} ${q(p[2][0])} ${q(p[2][1])} `;}
   return s.trimEnd();}
+// v2 binary emit: hand the drawing to studio-core.wasm (curves.Order +
+// EncodePath, the firmware's own encoder) as an mm path and get the payload
+// bytes back — byte-identical to cmd/svgplate. Until the wasm loads, fall back
+// to the v1 ASCII path (the device parses both) so the editor works with no
+// toolchain; studioCoreOnReady re-runs recompute to upgrade to v2.
+function mmPath(segs){const f=v=>+v.toFixed(4);let s='';
+  for(const g of segs){const p=g.p;
+    if(g.op==='M')s+=`M${f(p[0][0])} ${f(p[0][1])} `;
+    else if(g.op==='L')s+=`L${f(p[0][0])} ${f(p[0][1])} `;
+    else if(g.op==='Q')s+=`Q${f(p[0][0])} ${f(p[0][1])} ${f(p[1][0])} ${f(p[1][1])} `;
+    else if(g.op==='C')s+=`C${f(p[0][0])} ${f(p[0][1])} ${f(p[1][0])} ${f(p[1][1])} ${f(p[2][0])} ${f(p[2][1])} `;}
+  return s.trimEnd();}
+function encodePath(segs){
+  if(segs.length&&window.studioCoreEncode){
+    const r=window.studioCoreEncode(mmPath(segs));
+    if(r&&!r.error&&r.payload)return r.payload;}
+  return new TextEncoder().encode(emit(segs));}
+function b64(bytes){let s='';for(let i=0;i<bytes.length;i++)s+=String.fromCharCode(bytes[i]);return btoa(s);}
 function pathLen(segs){let L=0,pen=null;for(const g of segs){const p=g.p;
   if(g.op==='M'){pen=p[0];continue;} const e=p[p.length-1];
   if(pen)L+=Math.hypot(e[0]-pen[0],e[1]-pen[1]);pen=e;}return L;}
@@ -601,7 +619,7 @@ function draw(segs, grid){
 function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
 
 // ==== app state ====
-let payload='', ok=false, sendKind='path';
+let payload=null, ok=false, sendKind='path';
 // Text/Rich/Graphics compose a payload; SeedHammer is a device tab that
 // consumes the last composed payload rather than editing it.
 const EDITOR_MODES=['text','canvas','rich','svg'];
@@ -621,24 +639,24 @@ function recompute(){
       else if(has&&!tSize)err='does not fit any plate size';
       segs=tSize?textSegs(lines,tSize):[];
       // text sends the cheap text envelope, not the vector path
-      sendKind='text'; payload=`${SH.version} text\n`+lines.join('\n');
+      sendKind='text'; payload=new TextEncoder().encode(`${SH.version} text\n`+lines.join('\n'));
       document.getElementById('textHint').textContent=has?
         (tSize?`${tCols}×${tRows} · engraves at ${tSize.mm.toFixed(1)} mm`:'✕ '+err):'';
       document.getElementById('textHint').className='hint'+(err?' bad':'');
       document.getElementById('text').classList.toggle('bad',!!err);
     } else if(m==='canvas'){
       segs=window.Canvas?window.Canvas.worldSegs():[];
-      sendKind='path'; payload=emit(segs);
+      sendKind='path'; payload=encodePath(segs);
     } else if(m==='rich'){
       segs=renderMD(document.getElementById('md').value,parseFloat(document.getElementById('bodyMM').value)||5);
-      sendKind='path'; payload=emit(segs);
+      sendKind='path'; payload=encodePath(segs);
     } else {
       const t=document.getElementById('svg').value.trim();
       if(t){segs=layout(extractSVG(t),parseFloat(document.getElementById('height').value)||0,
         parseFloat(document.getElementById('rotate').value)||0,document.getElementById('pos').value.trim());}
-      sendKind='path'; payload=emit(segs);
+      sendKind='path'; payload=encodePath(segs);
     }
-  }catch(e){err=String(e.message||e);segs=[];payload='';}
+  }catch(e){err=String(e.message||e);segs=[];payload=null;}
   const gridCtx=m==='text'?(tSize||SH.sizes[SH.sizes.length-1]):null;
   // When the cost model has loaded, draw the spline the device actually cuts
   // (planner-resampled, corner-clamped) rather than the raw input paths.
@@ -659,7 +677,7 @@ function plannedToSegs(json){
 }
 function gauges(m,segs,err,tCols,tRows,tSize){
   const b=bounds(segs);
-  const bytes=payload?new TextEncoder().encode(payload).length:0;
+  const bytes=payload?payload.length:0;
   // Firmware-exact cost from studio-core.wasm when it has loaded: real knot
   // caps and planned engraving time. Falls back to a JS estimate otherwise.
   let exact=null;
@@ -694,7 +712,10 @@ function gauges(m,segs,err,tCols,tRows,tSize){
   document.getElementById('send').disabled=!ok||!(bridgeUp||'NDEFReader'in window);
   document.getElementById('copy').disabled=!payload;
   document.getElementById('download').disabled=!payload;
-  document.getElementById('payload').textContent=payload;
+  // payload is bytes now: show text envelopes verbatim, binary as its ASCII
+  // header plus a size note (raw bytes through textContent would render as a
+  // comma-joined decimal dump)
+  document.getElementById('payload').textContent=!payload?'':(sendKind==='text'?new TextDecoder().decode(payload):(()=>{const nl=payload.indexOf(10);const hdr=new TextDecoder().decode(payload.slice(0,nl<0?payload.length:nl));return hdr+'\n… '+payload.length+' bytes, binary v2 body';})());
 }
 
 // ==== wiring ====
@@ -728,9 +749,9 @@ file.onchange=e=>{const f=e.target.files[0];if(f)f.text().then(t=>{document.getE
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
 drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)f.text().then(t=>{document.getElementById('svg').value=t;recompute();});});
 document.getElementById('emuFeed').onclick=()=>window.SeedHammerEmu.feed(payload);
-document.getElementById('copy').onclick=async()=>{await navigator.clipboard.writeText(payload);status('Copied ✓');};
-document.getElementById('download').onclick=()=>{const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([payload],{type:'text/plain'}));a.download=(sendKind==='text'?'plate.txt':'plate.curves');a.click();};
+document.getElementById('copy').onclick=async()=>{if(!payload)return;await navigator.clipboard.writeText(sendKind==='text'?new TextDecoder().decode(payload):b64(payload));status('Copied ✓');};
+document.getElementById('download').onclick=()=>{if(!payload)return;const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([payload],{type:'application/octet-stream'}));a.download=(sendKind==='text'?'plate.txt':'plate.curves');a.click();};
 // ==== NFC send: local bridge on desktop, Web NFC on Android ====
 // When the bridge serves this page it is same-origin; otherwise reach
 // the loopback daemon cross-origin (it allow-lists this site + PNA).
@@ -746,11 +767,14 @@ function bridgeMsg(j){switch(j.status){
   default:return 'Send failed: '+(j.detail||j.error||'unknown');}}
 document.getElementById('send').onclick=async()=>{
   if(bridgeUp){status('Hold the reader against the SeedHammer…');
-    try{const r=await fetch(BRIDGE+'/bridge/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({payload})});
+    // text envelopes ride the string field an older bridge understands;
+    // only binary v2 payloads need the base64 field (and a v2-aware bridge)
+    try{const body=sendKind==='text'?{payload:new TextDecoder().decode(payload)}:{payloadB64:b64(payload)};
+      const r=await fetch(BRIDGE+'/bridge/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       status(bridgeMsg(await r.json()));}catch(e){status('Bridge: '+e.message);}
     return;}
   try{status('Hold the phone against the SeedHammer…');
-    const ndef=new NDEFReader();await ndef.write({records:[{recordType:SH.recordType,data:new TextEncoder().encode(payload)}]});
+    const ndef=new NDEFReader();await ndef.write({records:[{recordType:SH.recordType,data:payload}]});
     status('Written ✓ — check the device screen');}catch(e){status('NFC: '+e.message);}};
 function status(m){document.getElementById('status').textContent=m;}
 if(!('NDEFReader'in window)&&!bridgeUp)document.getElementById('send').title='Needs the NFC bridge (desktop) or Android Chrome (Web NFC)';

@@ -11,12 +11,14 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"syscall/js"
 
 	"seedhammer.com/bezier"
 	"seedhammer.com/bspline"
 	"seedhammer.com/curves"
 	"seedhammer.com/engrave"
+	"seedhammer.com/svgpath"
 )
 
 // The SH2 engraver parameters, mirroring cmd/svgplate/emit.go and
@@ -51,7 +53,7 @@ func report(this js.Value, args []js.Value) any {
 		res["error"] = "no payload"
 		return js.ValueOf(res)
 	}
-	d, err := curves.Parse([]byte(args[0].String()), sh2)
+	d, err := curves.Parse(argBytes(args[0]), sh2)
 	if err != nil {
 		res["error"] = err.Error()
 		return js.ValueOf(res)
@@ -111,8 +113,60 @@ func planJSON(d *curves.Drawing) string {
 	return string(b)
 }
 
+// The v2 wire quantization, matching cmd/svgplate/emit.go: 0.1mm units
+// (below the needle and the planner's sampling) and a 0.3mm needle.
+const (
+	encodeUPMM   = 10
+	encodeStroke = 3
+)
+
+// encode turns a drawing into a version 2 binary curves payload. It takes
+// an ASCII M/L/Q/C path in millimetres (the editor's world units), so the
+// same round-to-0.1mm, stroke ordering and binary encoding the host
+// converter uses run here through the shared curves package — the payload
+// is byte-identical to what cmd/svgplate would emit for the same geometry.
+// It returns {payload: Uint8Array} or {error: string}.
+func encode(this js.Value, args []js.Value) any {
+	if len(args) < 1 {
+		return js.ValueOf(map[string]any{"error": "no path"})
+	}
+	scale := func(v float64) int { return int(math.Round(v * encodeUPMM)) }
+	it := svgpath.NewIter(args[0].String(), 0, 0, scale)
+	var segs []svgpath.Segment
+	for {
+		s, ok := it.Next()
+		if !ok {
+			break
+		}
+		segs = append(segs, s)
+	}
+	if err := it.Err(); err != nil {
+		return js.ValueOf(map[string]any{"error": err.Error()})
+	}
+	segs = curves.Order(segs)
+	payload, err := curves.EncodePath(encodeUPMM, encodeStroke, segs)
+	if err != nil {
+		return js.ValueOf(map[string]any{"error": err.Error()})
+	}
+	arr := js.Global().Get("Uint8Array").New(len(payload))
+	js.CopyBytesToJS(arr, payload)
+	return js.ValueOf(map[string]any{"payload": arr, "error": ""})
+}
+
+// argBytes reads a JS payload argument, whether a string (a text payload
+// or a v1 ASCII path) or a Uint8Array (a v2 binary path).
+func argBytes(arg js.Value) []byte {
+	if arg.Type() == js.TypeString {
+		return []byte(arg.String())
+	}
+	b := make([]byte, arg.Get("length").Int())
+	js.CopyBytesToGo(b, arg)
+	return b
+}
+
 func main() {
 	js.Global().Set("studioCoreReport", js.FuncOf(report))
+	js.Global().Set("studioCoreEncode", js.FuncOf(encode))
 	js.Global().Set("studioCoreReady", js.ValueOf(true))
 	if cb := js.Global().Get("studioCoreOnReady"); cb.Type() == js.TypeFunction {
 		cb.Invoke()

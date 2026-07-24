@@ -20,8 +20,9 @@
   // Short vs long forms follow the NFC Forum spec exactly (SR when the
   // payload fits a byte, 0xFF-escaped 2-byte TLV length past 254), so the
   // output equals ndeflib's for every size.
-  function buildCurvesTap(payloadStr) {
-    const payload = enc.encode(payloadStr);
+  function buildCurvesTap(payloadStrOrBytes) {
+    // A v2 path payload is binary (Uint8Array); a text/v1 payload is a string.
+    const payload = payloadStrOrBytes instanceof Uint8Array ? payloadStrOrBytes : enc.encode(payloadStrOrBytes);
     const type = enc.encode(RECORD_TYPE); // 21 bytes, ASCII
     const rec = [];
     if (payload.length < 256) {

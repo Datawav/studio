@@ -450,7 +450,7 @@ window.Canvas = (function () {
     for (let it = 0; it < 16; it++) {
       const eps = (lo + hi) / 2;
       heavy.forEach(o => { o.eps = eps; o.segs = simplifySegs(o.raw, eps); });
-      const segs = worldSegs(), strokes = segs.filter(s => s.op === "M").length, bytes = new TextEncoder().encode(emit(segs)).length;
+      const segs = worldSegs(), strokes = segs.filter(s => s.op === "M").length, bytes = encodePath(segs).length;
       if (strokes > SH.maxStrokes || bytes > SH.payloadCap) lo = eps; else hi = eps;
     }
     heavy.forEach(o => { o.eps = hi; o.segs = simplifySegs(o.raw, hi); });
