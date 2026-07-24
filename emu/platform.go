@@ -21,29 +21,9 @@ const (
 	lcdHeight = 320
 )
 
-// Engraver speeds and step density mirror the constants used in
-// gui/gui_test.go:329-336. Reused literally rather than imported because
-// _test.go files are not visible to a non-test build.
-const (
-	mm             = 6400
-	strokeWidth    = 0.3 * mm
-	topSpeed       = 30 * mm
-	engravingSpeed = 8 * mm
-	acceleration   = 250 * mm
-	jerk           = 2600 * mm
-)
-
-var engraverParams = engrave.Params{
-	StrokeWidth: strokeWidth,
-	Millimeter:  mm,
-	StepperConfig: engrave.StepperConfig{
-		TicksPerSecond: topSpeed,
-		Speed:          topSpeed,
-		EngravingSpeed: engravingSpeed,
-		Acceleration:   acceleration,
-		Jerk:           jerk,
-	},
-}
+// The shared SeedHammer II engraver profile: the emulator plans and gauges
+// with exactly what the device engraves.
+var engraverParams = engrave.SH2Params
 
 // Platform implements gui.Platform for a browser canvas. All state crossings
 // with JS go through channels so the gui package never sees js.Value.

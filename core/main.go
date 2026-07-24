@@ -21,22 +21,9 @@ import (
 	"seedhammer.com/svgpath"
 )
 
-// The SH2 engraver parameters, mirroring cmd/svgplate/emit.go and
-// cmd/controller/platform_sh2.go. A payload is measured against these so the
-// gauge matches exactly what the device would accept.
-const deviceMM = 200 / 8 * 256 // 6400 machine units per millimeter.
-
-var sh2 = engrave.Params{
-	StrokeWidth: int(0.3 * deviceMM),
-	Millimeter:  deviceMM,
-	StepperConfig: engrave.StepperConfig{
-		TicksPerSecond: 30 * deviceMM,
-		Speed:          30 * deviceMM,
-		EngravingSpeed: 8 * deviceMM,
-		Acceleration:   250 * deviceMM,
-		Jerk:           2600 * deviceMM,
-	},
-}
+// The shared SeedHammer II engraver profile: payloads are measured against
+// exactly what the device engraves.
+var sh2 = engrave.SH2Params
 
 // report parses a curves path payload and returns its cost against the caps.
 // The result object mirrors curves.Report plus the caps and the first cap the
