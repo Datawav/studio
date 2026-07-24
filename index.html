@@ -230,9 +230,20 @@ button.ghost.danger:hover { border-color: var(--bad); color: var(--bad); }
 .cvTmp { fill: none; stroke: var(--accent); stroke-width: .6; vector-effect: non-scaling-stroke; stroke-dasharray: 1.5 1.5; }
 .cvMark { fill: none; stroke: var(--accent); stroke-width: .5; vector-effect: non-scaling-stroke; stroke-dasharray: 1.2 1.2; opacity: .85; }
 .cvSnap { stroke: var(--ok); stroke-width: .4; vector-effect: non-scaling-stroke; stroke-dasharray: 2 2; opacity: .8; }
-.cvInline { position: absolute; z-index: 5; min-width: 120px; min-height: 34px; padding: 5px 7px; border-radius: 8px;
-  border: 1px solid var(--accent); background: var(--page); color: var(--ink);
-  font: 13px/1.4 ui-monospace, Menlo, monospace; resize: both; box-shadow: var(--shadow); }
+/* In-place text editing: no box. .cvInline is an invisible textarea that only
+   captures the keyboard and owns the cursor; the visible caret is drawn in the
+   SVG (.cvCaret), positioned with the plate font's own advances so it sits
+   exactly between the engraved glyphs. */
+.cvInline { position: absolute; z-index: 5; padding: 0; margin: 0; border: 0; background: transparent;
+  color: transparent; caret-color: transparent; overflow: hidden; resize: none;
+  min-height: 0; width: auto; flex: none; box-sizing: border-box; font: 12px monospace; white-space: pre;
+  pointer-events: none; }
+.cvCaret { stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; stroke-linecap: round;
+  animation: cvBlink 1.06s steps(1) infinite; }
+.cvCaret.bad { stroke: var(--bad); }
+.cvInline::selection { background: transparent; }
+@keyframes cvBlink { 50% { opacity: 0; } }
+.cvSel { fill: var(--accent); opacity: .28; stroke: none; }
 </style>
 </head>
 <body>
@@ -240,8 +251,8 @@ button.ghost.danger:hover { border-color: var(--bad); color: var(--bad); }
   <header class="bar glass">
     <div class="brand"><img src="icon.svg" alt=""> SeedHammer <small>Studio</small></div>
     <div class="seg" role="tablist">
-      <button role="tab" aria-selected="true" data-mode="text">Text</button>
-      <button role="tab" aria-selected="false" data-mode="canvas">Canvas</button>
+      <button role="tab" aria-selected="true" data-mode="canvas">Canvas</button>
+      <button role="tab" aria-selected="false" data-mode="text">Text</button>
       <button role="tab" aria-selected="false" data-mode="emu">SeedHammer</button>
     </div>
     <button class="install" id="install">Install</button>
@@ -249,15 +260,15 @@ button.ghost.danger:hover { border-color: var(--bad); color: var(--bad); }
 
   <main>
     <section class="panel glass" data-view="editor">
-      <h2 id="editorTitle">Text plate</h2>
-      <div data-pane="text" style="display:flex;flex-direction:column;flex:1">
+      <h2 id="editorTitle">Canvas</h2>
+      <div data-pane="text" hidden style="flex-direction:column;flex:1">
         <textarea id="text" spellcheck="false" placeholder="Type a plate…&#10;Firmware font, engraved on the grid.">IN CASE OF EMERGENCY
 BREAK GLASS
 
 SEEDHAMMER</textarea>
         <div class="hint" id="textHint"></div>
       </div>
-      <div data-pane="canvas" hidden style="flex-direction:column;flex:1;gap:10px;min-height:0">
+      <div data-pane="canvas" style="display:flex;flex-direction:column;flex:1;gap:10px;min-height:0">
         <div class="tools" id="cvTools">
           <button data-tool="select" class="on" title="Select (V)">▲</button>
           <button data-tool="text" title="Text (T)">T</button>
@@ -274,15 +285,13 @@ SEEDHAMMER</textarea>
           <button id="cvUndo" title="Undo (Ctrl/Cmd+Z)">↶</button>
           <button id="cvRedo" title="Redo (Shift+Ctrl/Cmd+Z)">↷</button>
         </div>
-        <div class="cvStageBox"><div class="cvStage"><svg id="cv" viewBox="0 0 85 85" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="3" width="79" height="79" class="cvMargin"/><g id="cvObjs"></g><g id="cvUI"></g></svg></div></div>
-        <div class="styleBar" id="cvStyle" hidden>
-          <span id="cvStyleText" class="grp">
+        <div class="styleBar" id="cvStyle">
+          <span id="cvStyleText" class="grp" hidden>
             <label>Size <input type="number" id="cvSize" min="1" max="40" step="0.5"> mm</label>
             <button id="cvItalic" title="Italic"><i>i</i></button>
             <button id="cvUnder" title="Underline"><u>U</u></button>
-            <textarea id="cvEdit" rows="1" placeholder="text…  *italic*  _underline_" title="*text* italic, _text_ underline, per word — mix freely in one field"></textarea>
           </span>
-          <span id="cvStyleShape" class="grp"><label>Detail <input type="range" id="cvDetail" min="0" max="100" value="0"></label></span>
+          <span id="cvStyleShape" class="grp" hidden><label>Detail <input type="range" id="cvDetail" min="0" max="100" value="0"></label></span>
           <span class="tsep"></span>
           <button id="cvGroup" title="Group (Ctrl/Cmd+G)" hidden>⊞ group</button>
           <button id="cvUngroup" title="Ungroup (Ctrl/Cmd+Shift+G)" hidden>⊟ ungroup</button>
@@ -293,6 +302,7 @@ SEEDHAMMER</textarea>
           <button id="cvDup" title="Duplicate">⧉</button>
           <button id="cvDel" title="Delete">✕</button>
         </div>
+        <div class="cvStageBox"><div class="cvStage"><svg id="cv" viewBox="0 0 85 85" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="3" width="79" height="79" class="cvMargin"/><g id="cvObjs"></g><g id="cvUI"></g></svg></div></div>
         <div class="row" style="margin-top:0">
           <button id="cvAutoFit" class="ghost">Auto-fit to budget</button>
           <button id="cvShare" class="ghost">Share link</button>
@@ -308,7 +318,7 @@ SEEDHAMMER</textarea>
       <div class="spec">
         <div class="dims">
           <div><b id="size">—</b> <span id="time"></span></div>
-          <label class="chip" id="gridChip"><input type="checkbox" id="grid" checked> Grid</label>
+          <label class="chip" id="gridChip" style="display:none"><input type="checkbox" id="grid" checked> Grid</label>
         </div>
         <div class="meter"><span class="lbl">payload</span><div class="track"><div class="fill" id="mBytes"></div></div><span class="val" id="vBytes"></span></div>
         <div class="meter"><span class="lbl">strokes</span><div class="track"><div class="fill" id="mStrokes"></div></div><span class="val" id="vStrokes"></span></div>
@@ -367,7 +377,6 @@ const PLATE_MM = SH.plateMM, MARGIN_MM = SH.marginMM;
 const UPMM = 100, STROKE_U = 30, FIT_MM = PLATE_MM - 2 * MARGIN_MM;
 const CAP = { bytes: SH.payloadCap, strokes: SH.maxStrokes, minutes: SH.maxMinutes };
 const ITALIC = 0.21, LSP = 1.18, CPAD = 1.2, RPAD = 0.6;
-const HSCALE = { 1: 2.0, 2: 1.5, 3: 1.25 };
 // SH2 engrave speed model, enough for a time estimate (mm/s under the caps).
 const ENGRAVE_MM_S = 8;
 
@@ -589,12 +598,11 @@ function recompute(){
       document.getElementById('text').classList.toggle('bad',!!err);
     } else if(m==='canvas'){
       segs=window.Canvas?window.Canvas.worldSegs():[];
-      sendKind='path'; payload=encodePath(segs);
+      sendKind='path'; payload=segs.length?encodePath(segs):null;
       const objs=(window.Canvas&&window.Canvas._doc().objects)||[];
       // collect text recursively: grouped text objects must not slip past the gate
       const collectText=list=>list.flatMap(o=>o.type==='text'?[o.str||'']:(o.type==='group'?collectText(o.children||[]):[]));
       err=charErr(collectText(objs).join('\n'))||null;
-      const ce=document.getElementById('cvEdit');if(ce)ce.classList.toggle('bad',!!charErr(ce.value));
     }
   }catch(e){err=String(e.message||e);segs=[];payload=null;}
   const gridCtx=m==='text'?(tSize||SH.sizes[SH.sizes.length-1]):null;
@@ -691,7 +699,7 @@ document.getElementById('download').onclick=()=>{if(!payload)return;const a=docu
 // the loopback daemon cross-origin (it allow-lists this site + PNA).
 const BRIDGE=(location.port==='8787'&&(location.hostname==='127.0.0.1'||location.hostname==='localhost'))?'':'http://127.0.0.1:8787';
 let bridgeUp=false;
-fetch(BRIDGE+'/bridge/health').then(r=>r.ok?r.json():null).then(j=>{bridgeUp=!!(j&&j.ok);recompute();}).catch(()=>{});
+fetch(BRIDGE+'/bridge/health').then(r=>r.ok?r.json():null).then(j=>{bridgeUp=!!(j&&j.ok);if(bridgeUp)document.getElementById('send').title='';recompute();}).catch(()=>{});
 function bridgeMsg(j){switch(j.status){
   case 'written':return `Written ✓ ${j.bytes||''} bytes`;
   case 'delivered_unconfirmed':return 'Delivered — check the device screen';

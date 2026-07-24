@@ -24,6 +24,8 @@ window.Canvas = (function () {
   let sel = null;                       // selected object id (single-object transforms)
   let marks = [];                       // shift-click multi-selection (for grouping/move)
   let tool = "select";
+  let editId = null, editCaret = 0;    // text object being edited in place + caret index
+  let editTA = null, editDrag = null;  // the editor's capture textarea + mouse-selection anchor
   let counter = 0;
   const undo = [], redo = [];
   let suppressSnapshot = false;
@@ -84,7 +86,45 @@ window.Canvas = (function () {
     if (!isFinite(a)) return { minX: 0, minY: 0, maxX: 0, maxY: 0, w: 0, h: 0, empty: true };
     return { minX: a, minY: b, maxX: c, maxY: d, w: c - a, h: d - b, empty: false };
   }
-  function textLocal(o) {
+  function textLocal(o) { return centered(layoutGlyphs(o)); }
+  // The text caret as a world-space line. It uses the plate font's own
+  // advances and the same centring layoutGlyphs feeds textLocal, so it sits
+  // exactly between the engraved glyphs at any size or rotation — no font
+  // matching, unlike an HTML overlay.
+  function caretLine(o, idx) {
+    const c = caretLocal(o, idx), m = affine(o.tf);
+    return [apply(m, [c.x, c.y0]), apply(m, [c.x, c.y1])];
+  }
+  // the block-centring offset textLocal applies, so caret/selection geometry
+  // shares the glyphs' coordinate frame
+  function textCentre(o) {
+    const b = bounds(layoutGlyphs(o));
+    return b.empty ? [0, 0] : [(b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2];
+  }
+  // markers style runs but occupy no width; visible column of raw index i
+  const visCol = (line, i) => { let n = 0; for (let k = 0; k < Math.min(i, line.length); k++) if (line[k] !== "*" && line[k] !== "_") n++; return n; };
+  // caret geometry for raw string index idx, in the object's local frame
+  function caretLocal(o, idx) {
+    const sc = o.sizeMM / SH.height, lines = (o.str || "").split("\n");
+    let li = 0, col = Math.max(0, idx | 0);
+    while (li < lines.length - 1 && col > lines[li].length) { col -= lines[li].length + 1; li++; }
+    const [cx, cy] = textCentre(o), y = li * o.sizeMM * LSP;
+    return { x: visCol(lines[li] || "", col) * SH.advance * sc - cx, y0: y - cy, y1: y + o.sizeMM - cy, li };
+  }
+  // nearest raw string index for a point in the object's local frame — the
+  // inverse of caretLocal, for mouse caret placement and drag selection
+  function indexAt(o, lx, ly) {
+    const sc = o.sizeMM / SH.height, adv = SH.advance * sc, lines = (o.str || "").split("\n");
+    const [cx, cy] = textCentre(o);
+    const li = Math.max(0, Math.min(lines.length - 1, Math.floor((ly + cy) / (o.sizeMM * LSP))));
+    const line = lines[li], want = Math.max(0, Math.round((lx + cx) / adv));
+    let raw = 0, seen = 0;
+    while (raw < line.length && seen < want) { if (line[raw] !== "*" && line[raw] !== "_") seen++; raw++; }
+    let idx = raw; for (let k = 0; k < li; k++) idx += lines[k].length + 1;
+    return idx;
+  }
+  // un-centred glyph geometry in the object's local space
+  function layoutGlyphs(o) {
     const cellH = SH.height, asc = SH.ascent, adv = SH.advance, sc = o.sizeMM / cellH;
     const out = [], lines = (o.str || "").split("\n");
     for (let li = 0; li < lines.length; li++) {
@@ -105,7 +145,7 @@ window.Canvas = (function () {
         if (underline && x > rx0) { const uy = y + asc * sc + o.sizeMM * 0.1; out.push({ op: "M", p: [[rx0, uy]] }, { op: "L", p: [[x, uy]] }); }
       }
     }
-    return centered(out);
+    return out;
   }
   // local half-extents for handles
   function halfExtent(o) {
@@ -147,6 +187,29 @@ window.Canvas = (function () {
   }
   function renderUI() {
     gUI.textContent = "";
+    if (editId != null) {
+      const eo = doc.objects.find(x => x.id === editId);
+      if (eo) {
+        // selection highlight: one translucent quad per spanned line, in the
+        // same advance-cell frame as the glyphs and the caret
+        if (editTA && editTA.selectionStart !== editTA.selectionEnd) {
+          const m = affine(eo.tf), sc = eo.sizeMM / SH.height, adv = SH.advance * sc;
+          const lines = (eo.str || "").split("\n"), [cx, cy] = textCentre(eo);
+          const a = caretLocal(eo, Math.min(editTA.selectionStart, editTA.selectionEnd));
+          const b = caretLocal(eo, Math.max(editTA.selectionStart, editTA.selectionEnd));
+          for (let li = a.li; li <= b.li; li++) {
+            const x0 = li === a.li ? a.x : -cx;
+            const x1 = li === b.li ? b.x : visCol(lines[li], lines[li].length) * adv - cx;
+            const y0 = li * eo.sizeMM * LSP - cy, y1 = y0 + eo.sizeMM;
+            const q = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(p => apply(m, p));
+            gUI.appendChild(el("polygon", { points: q.map(c => c.join(",")).join(" "), class: "cvSel" }));
+          }
+        }
+        const [a, z] = caretLine(eo, editCaret), bad = window.charErr && charErr(eo.str);
+        gUI.appendChild(el("line", { x1: a[0], y1: a[1], x2: z[0], y2: z[1], class: "cvCaret" + (bad ? " bad" : "") }));
+      }
+      return;
+    }
     if (marks.length > 1) {
       for (const id of marks) { const o = doc.objects.find(x => x.id === id); if (!o) continue; const m = affine(o.tf), { hw, hh } = halfExtent(o), ph = Math.max(hw, 0.6), pv = Math.max(hh, 0.6); const cs = [[-ph, -pv], [ph, -pv], [ph, pv], [-ph, pv]].map(p => apply(m, p)); gUI.appendChild(el("polygon", { points: cs.map(c => c.join(",")).join(" "), class: "cvMark" })); }
       return;
@@ -175,16 +238,34 @@ window.Canvas = (function () {
   }
 
   // ---- interaction -------------------------------------------------------
-  let drag = null;
+  let drag = null, lastDownId = null;
   function onDown(ev) {
     if (ev.button !== undefined && ev.button !== 0) return;
     svg.setPointerCapture && svg.setPointerCapture(ev.pointerId);
     const p = toMM(ev), h = ev.target.getAttribute && ev.target.getAttribute("data-h");
-    if (tool !== "select") { startCreate(tool, p, ev); return; }
-    if (h && current()) { startHandle(h, p); return; }
+    // While a text object is being edited, a press on it moves the caret (a
+    // drag extends the selection) instead of starting a move; a press
+    // anywhere else falls through and the editor commits on blur.
+    if (editId != null && editTA) {
+      const eo = doc.objects.find(x => x.id === editId);
+      if (eo) {
+        const lp = toLocal(eo, p), { hw, hh } = halfExtent(eo);
+        if (lp[0] >= -hw - 1.5 && lp[0] <= hw + 1.5 && lp[1] >= -hh - 1.5 && lp[1] <= hh + 1.5) {
+          ev.preventDefault();
+          const idx = indexAt(eo, lp[0], lp[1]);
+          editDrag = { anchor: idx };
+          editTA.setSelectionRange(idx, idx); editTA.focus({ preventScroll: true });
+          editCaret = idx; render();
+          return;
+        }
+      }
+    }
+    if (tool !== "select") { lastDownId = null; startCreate(tool, p, ev); return; }
+    if (h && current()) { lastDownId = null; startHandle(h, p); return; }
     // hit-test: a direct stroke hit, else the topmost object whose box contains p
     const hitG = ev.target.closest && ev.target.closest(".cvObj");
     const id = hitG ? hitG.getAttribute("data-id") : pickAt(p);
+    lastDownId = id;
     if (id && ev.shiftKey) { toggleMark(id); return; }
     if (id) { marks = []; select(id); startMove(p); }
     else { marks = []; select(null); }
@@ -216,12 +297,28 @@ window.Canvas = (function () {
     drag = { kind: h === "rot" ? "rot" : "scale", o, start: p, tf0: { ...o.tf }, h, hw, hh, size0: o.sizeMM };
   }
   function startCreate(t, p, ev) {
-    if (t === "text") { commitSnapshot(); const o = mkText("Text", p); select(o.id); setTool("select"); recomputeAll(); requestAnimationFrame(focusEdit); return; }
+    if (t === "text") {
+      // The click's default action would move focus AFTER our handlers run,
+      // instantly blurring the just-opened editor (and dropping the still-
+      // empty object). Cancel it so the editor keeps focus.
+      if (ev && ev.cancelable) ev.preventDefault();
+      commitSnapshot(); const o = mkText("", p); select(o.id); setTool("select"); recomputeAll(); openInline(o); return;
+    }
     if (t === "poly") { addPolyVertex(p); return; }
     // rect / ellipse / line / pen: drag to size
     drag = { kind: "create", t, start: p, pts: [p] };
   }
   function onMove(ev) {
+    if (editDrag && editId != null && editTA) {
+      const eo = doc.objects.find(x => x.id === editId);
+      if (eo) {
+        const lp = toLocal(eo, toMM(ev)), idx = indexAt(eo, lp[0], lp[1]);
+        const a = Math.min(editDrag.anchor, idx), b = Math.max(editDrag.anchor, idx);
+        editTA.setSelectionRange(a, b, idx < editDrag.anchor ? "backward" : "forward");
+        editCaret = idx; render();
+      }
+      return;
+    }
     if (!drag) return;
     const p = toMM(ev);
     if (drag.kind === "move") { const dx = p[0] - drag.start[0], dy = p[1] - drag.start[1]; drag.o.tf.x = drag.tf0.x + dx; drag.o.tf.y = drag.tf0.y + dy; snapMove(drag.o); liveTransform(drag.o); }
@@ -230,6 +327,7 @@ window.Canvas = (function () {
     else if (drag.kind === "create") { drag.pts.push(p); previewCreate(); }
   }
   function onUp() {
+    editDrag = null;
     if (!drag) { return; }
     gUI.querySelectorAll(".cvSnap").forEach(n => n.remove());
     if (drag.kind === "create") finishCreate();
@@ -353,8 +451,10 @@ window.Canvas = (function () {
   function select(id) { sel = id; renderUI(); syncStyle(); }
   function setTool(t) { tool = t; document.querySelectorAll("#cvTools [data-tool]").forEach(b => b.classList.toggle("on", b.dataset.tool === t)); if (t !== "poly" && polyPts) finishPoly(false); svg && (svg.style.cursor = t === "select" ? "default" : "crosshair"); }
   function syncStyle() {
-    const bar = document.getElementById("cvStyle"), o = current(), showGroup = marks.length >= 2;
-    bar.hidden = !o && !showGroup;
+    // The bar itself stays in the layout permanently: collapsing it reflowed
+    // the page and shifted the plate mid-gesture, so a double-click's second
+    // press landed off the object. Only its contextual groups toggle.
+    const o = current(), showGroup = marks.length >= 2;
     const gb = document.getElementById("cvGroup"), ub = document.getElementById("cvUngroup");
     if (gb) gb.hidden = !showGroup;
     if (ub) ub.hidden = !(o && o.type === "group");
@@ -362,13 +462,9 @@ window.Canvas = (function () {
     const isText = o.type === "text", canSimplify = o.type === "svg" || o.type === "trace" || o.type === "freehand";
     document.getElementById("cvStyleText").hidden = !isText;
     document.getElementById("cvStyleShape").hidden = !canSimplify;
-    if (isText) { document.getElementById("cvSize").value = o.sizeMM.toFixed(1); document.getElementById("cvEdit").value = o.str; growEdit(); document.getElementById("cvItalic").classList.toggle("on", o.italic); document.getElementById("cvUnder").classList.toggle("on", o.underline); }
+    if (isText) { document.getElementById("cvSize").value = o.sizeMM.toFixed(1); document.getElementById("cvItalic").classList.toggle("on", o.italic); document.getElementById("cvUnder").classList.toggle("on", o.underline); }
     if (canSimplify) document.getElementById("cvDetail").value = o.eps ? Math.min(100, o.eps * 100) : 0;
   }
-  // A text field holds multiple lines: the editor is a textarea and its
-  // height tracks the content, so it stays one line until Enter adds more.
-  function growEdit() { const f = document.getElementById("cvEdit"); if (!f) return; f.style.height = "auto"; f.style.height = Math.min(f.scrollHeight, 160) + "px"; }
-  function focusEdit() { const f = document.getElementById("cvEdit"); if (f) { f.focus(); f.select(); } }
 
   // ---- edits -------------------------------------------------------------
   function withObj(fn) { const o = current(); if (!o) return; commitSnapshot(); fn(o); render(); recomputeAll(); }
@@ -410,21 +506,111 @@ window.Canvas = (function () {
 
   // ---- in-place text editing ---------------------------------------------
   function onDbl(ev) {
-    const id = pickAt(toMM(ev)); if (!id) return;
+    // Fall back to the object the gesture's first press hit: any residual
+    // layout shift between the presses must not break double-click-to-edit.
+    const id = pickAt(toMM(ev)) || lastDownId; if (!id) return;
     const o = doc.objects.find(x => x.id === id); if (!o || o.type !== "text") return;
-    marks = []; select(id); openInline(o);
+    ev.preventDefault(); marks = []; select(id); openInline(o);
   }
+  // Edit a text object in place, on the plate: a textarea centred over the
+  // object, sized to roughly match the engraved text. Enter adds a line
+  // (text objects are multiline); Esc or clicking away commits. An object
+  // left empty is dropped.
+  // In-place text editing with a real on-plate caret (drawn in the SVG by
+  // renderUI). A transparent textarea over the object captures the keyboard
+  // and owns the cursor/selection natively — its own caret is hidden — while
+  // o.str and the caret index are mirrored into the render.
   function openInline(o) {
+    if (editId === o.id && editTA) { editTA.focus({ preventScroll: true }); return; }
     const stage = svg.parentElement; stage.style.position = "relative";
-    const box = svg.getBoundingClientRect(), sx = box.width / PLATE_MM, sy = box.height / PLATE_MM;
-    const c = apply(affine(o.tf), [0, 0]);
     const ta = document.createElement("textarea"); ta.className = "cvInline"; ta.value = o.str;
-    ta.style.left = Math.max(2, c[0] * sx - 70) + "px"; ta.style.top = Math.max(2, c[1] * sy - 16) + "px";
-    stage.appendChild(ta); ta.focus(); ta.select();
-    const commit = () => { if (ta.parentNode) ta.remove(); commitSnapshot(); render(); recomputeAll(); };
-    ta.oninput = () => { o.str = ta.value; render(); recomputeAll(); };
-    ta.onblur = commit;
-    ta.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ta.blur(); } if (e.key === "Escape") ta.blur(); };
+    ta.wrap = "off"; ta.spellcheck = false;
+    stage.appendChild(ta);
+    const px = svg.getBoundingClientRect().width / PLATE_MM;
+    const c = apply(affine(o.tf), [0, 0]), he = halfExtent(o);
+    ta.style.left = c[0] * px + "px"; ta.style.top = c[1] * px + "px";
+    ta.style.transform = "translate(-50%,-50%)";
+    ta.style.width = Math.max(28, (he.hw * 2 + 6) * px) + "px";
+    ta.style.height = Math.max(20, (Math.max(o.sizeMM, he.hh * 2) + 4) * px) + "px";
+    editId = o.id; editCaret = o.str.length; editTA = ta;
+    // Focus survival: the triggering click's default focus action (and any
+    // late layout) can land after us and blur the editor. Take focus now and
+    // again next frame, and until the opening settles treat a blur as that
+    // steal — re-take focus instead of committing.
+    const takeFocus = () => { ta.focus({ preventScroll: true }); const n = ta.value.length; ta.setSelectionRange(n, n); };
+    let settled = false;
+    requestAnimationFrame(() => requestAnimationFrame(() => { settled = true; }));
+    takeFocus(); requestAnimationFrame(takeFocus);
+    const sync = () => {
+      // the caret sits at the moving end of a selection, not always its start
+      editCaret = ta.selectionDirection === "backward" ? ta.selectionStart : ta.selectionEnd;
+      if (o.str !== ta.value) { o.str = ta.value; recomputeAll(); }
+      render();
+    };
+    render();
+    ta.oninput = sync; ta.onkeyup = sync; ta.onclick = sync; ta.onselect = sync;
+    ta.onblur = () => {
+      if (!settled) { takeFocus(); return; }
+      // a stale editor's late blur must not clobber a newer session's state
+      if (editTA !== ta) { if (ta.parentNode) ta.remove(); return; }
+      editId = null; editTA = null; editDrag = null; if (ta.parentNode) ta.remove();
+      if (!o.str.trim()) { doc.objects = doc.objects.filter(x => x !== o); if (sel === o.id) sel = null; }
+      commitSnapshot(); render(); syncStyle(); recomputeAll();
+    };
+    ta.onkeydown = e => {
+      e.stopPropagation();
+      if (e.key === "Escape") { e.preventDefault(); ta.blur(); return; }
+      // standard shortcuts: Ctrl/Cmd+I italic, Ctrl/Cmd+U underline
+      if ((e.ctrlKey || e.metaKey) && (e.key === "i" || e.key === "u")) { e.preventDefault(); toggleStyleRun(e.key === "i" ? "*" : "_"); }
+    };
+  }
+
+  // Toggle italic (*) or underline (_) over the editor's selected range —
+  // standard select-then-style editing. The transform works on the marker-
+  // stripped character sequence: if the whole selection already carries the
+  // style, it is removed, otherwise applied to all of it, and the string is
+  // rebuilt with minimal markers (styling resets at each newline, matching
+  // splitFmt's per-line parsing). With no selection the object's whole-field
+  // toggle applies, same as when not editing.
+  function toggleStyleRun(m) {
+    const o = doc.objects.find(x => x.id === editId);
+    if (!o || !editTA) return;
+    const selA = Math.min(editTA.selectionStart, editTA.selectionEnd);
+    const selB = Math.max(editTA.selectionStart, editTA.selectionEnd);
+    if (selA === selB) { withObj(x => { const f = m === "*" ? "italic" : "underline"; x[f] = !x[f]; }); syncStyle(); editTA.focus({ preventScroll: true }); return; }
+    const s = editTA.value;
+    // strip this marker, tracking each kept char's style parity and raw origin
+    const chars = [], styled = [], rawOf = []; let on = false;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (c === m) { on = !on; continue; }
+      if (c === "\n") on = false;
+      chars.push(c); styled.push(on); rawOf.push(i);
+    }
+    let ka = 0, kb = 0;
+    for (let i = 0; i < rawOf.length; i++) { if (rawOf[i] < selA) ka++; if (rawOf[i] < selB) kb++; }
+    if (ka === kb) return;
+    // "already styled" looks only at real text: newlines and the other
+    // style's markers are zero-width markup, not characters to style
+    const other = m === "*" ? "_" : "*";
+    let all = true;
+    for (let i = ka; i < kb; i++) if (chars[i] !== "\n" && chars[i] !== other && !styled[i]) { all = false; break; }
+    for (let i = ka; i < kb; i++) if (chars[i] !== "\n") styled[i] = !all;
+    // rebuild with markers at style transitions, re-opening after newlines
+    let out = "", cur = false, newA = -1, newB = -1;
+    for (let i = 0; i < chars.length; i++) {
+      if (i === ka) newA = out.length;
+      if (chars[i] === "\n") { out += "\n"; cur = false; continue; }
+      if (styled[i] !== cur) { out += m; cur = !cur; }
+      out += chars[i];
+    }
+    if (newA < 0) newA = out.length;
+    newB = kb >= chars.length ? out.length : (() => { let n = 0, seen = 0; for (; n < out.length && seen < kb; n++) if (out[n] !== m) seen++; return n; })();
+    commitSnapshot();
+    o.str = out; editTA.value = out;
+    editTA.setSelectionRange(newA, newB); editCaret = newB;
+    editTA.focus({ preventScroll: true });
+    render(); recomputeAll();
   }
 
   // ---- simplify + auto-fit -----------------------------------------------
@@ -532,17 +718,30 @@ window.Canvas = (function () {
     window.addEventListener("keydown", onKey);
     document.querySelectorAll("#cvTools [data-tool]").forEach(b => b.onclick = () => setTool(b.dataset.tool));
     // toolbar buttons
-    const on = (id, fn) => { const e = document.getElementById(id); if (e) e.onclick = fn; };
+    // Every generic toolbar action first commits an open text editor.
+    // Relying on the click's implicit blur is not portable: Safari and
+    // Firefox on macOS do not focus (or blur) on button mousedown, so
+    // Delete/Undo/Clear could act with the editor still live. blur() is
+    // synchronous, so the commit lands before fn runs.
+    const on = (id, fn) => { const e = document.getElementById(id); if (e) e.onclick = (...a) => { if (editTA) editTA.blur(); fn(...a); }; };
     on("cvUndo", doUndo); on("cvRedo", doRedo);
     on("cvDel", del); on("cvDup", dup); on("cvFwd", () => raise(1)); on("cvBack", () => raise(-1));
     on("cvFlipH", () => flip("h")); on("cvFlipV", () => flip("v"));
     on("cvGroup", group); on("cvUngroup", ungroup);
-    on("cvItalic", () => withObj(o => o.italic = !o.italic) || syncStyle());
-    on("cvUnder", () => withObj(o => o.underline = !o.underline) || syncStyle());
+    // While editing, i/U style the selected range (and must not steal the
+    // editor's focus on mousedown); otherwise they toggle the whole field.
+    const styleBtn = (id, marker, field) => {
+      const b = document.getElementById(id); if (!b) return;
+      b.addEventListener("mousedown", e => { if (editId != null) e.preventDefault(); });
+      b.addEventListener("click", () => {
+        if (editId != null && editTA) { toggleStyleRun(marker); return; }
+        withObj(o => o[field] = !o[field]); syncStyle();
+      });
+    };
+    styleBtn("cvItalic", "*", "italic");
+    styleBtn("cvUnder", "_", "underline");
     on("cvAutoFit", autoFit); on("cvShare", shareURL); on("cvClear", clearAll);
     const sz = document.getElementById("cvSize"); if (sz) sz.oninput = () => withObj(o => o.sizeMM = Math.max(0.8, parseFloat(sz.value) || o.sizeMM));
-    const ed = document.getElementById("cvEdit"); if (ed) ed.oninput = () => { growEdit(); const o = current(); if (o) { o.str = ed.value; render(); recomputeAll(); } };
-    if (ed) ed.onchange = commitSnapshot;
     const det = document.getElementById("cvDetail"); if (det) det.oninput = () => setDetail(parseFloat(det.value));
     on("cvSvg", () => document.getElementById("cvSvgFile").click());
     on("cvImg", () => document.getElementById("cvImgFile").click());
