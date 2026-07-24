@@ -28,7 +28,9 @@
         window.studioCoreReport = (p) => { if (p === key) return val; val = raw(p); key = p; return val; };
         if (typeof window.recompute === "function") window.recompute();
       };
-      const resp = await fetch(WASM);
+      // no-cache: always revalidate — a heuristically-cached module would
+      // silently pin a stale cost model / encoder across deploys.
+      const resp = await fetch(WASM, { cache: "no-cache" });
       if (!resp.ok) throw new Error("fetch " + WASM + " " + resp.status);
       const { instance } = await WebAssembly.instantiate(await resp.arrayBuffer(), go.importObject);
       go.run(instance); // never resolves (main blocks on select{}); do not await

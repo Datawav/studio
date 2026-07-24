@@ -9,12 +9,16 @@ standalone host for local runs.
 ## Build
 
 ```
-./build.sh          # writes ./emu.wasm (git-ignored) and ./wasm_exec.js
+FIRMWARE_DIR=~/seedhammer ./build.sh   # writes ./emu.wasm (git-ignored) and ./wasm_exec.js
+cp emu.wasm ..                         # the page serves the repo-root copy
 ```
 
-`emu.wasm` and `wasm_exec.js` are build outputs, never committed. In CI they are
-published as Release assets that Studio fetches by pinned digest; `wasm_exec.js`
-must come from the same Go that built `emu.wasm`.
+`emu.wasm` and `wasm_exec.js` are build outputs, never committed. The Pages
+workflow builds them from the firmware checkout pinned by `FIRMWARE_REF` and
+stages `emu/emu.wasm` into the deployed site root; for a local run you must
+copy it to the repo root yourself (the page fetches `./emu.wasm`), or the tab
+keeps serving a stale build. `wasm_exec.js` must come from the same Go that
+built `emu.wasm`.
 
 ## Host bridge
 

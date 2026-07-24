@@ -104,12 +104,14 @@
       await loadScript(EXEC_URL); // defines the Go class
       const go = new Go();
       let instance;
+      // no-cache: always revalidate — the browser's heuristic HTTP cache can
+      // otherwise hold a stale firmware build for hours.
       try {
-        const r = await WebAssembly.instantiateStreaming(fetch(WASM_URL), go.importObject);
+        const r = await WebAssembly.instantiateStreaming(fetch(WASM_URL, { cache: "no-cache" }), go.importObject);
         instance = r.instance;
       } catch (_) {
         // Fallback for hosts that don't serve application/wasm.
-        const buf = await (await fetch(WASM_URL)).arrayBuffer();
+        const buf = await (await fetch(WASM_URL, { cache: "no-cache" })).arrayBuffer();
         const r = await WebAssembly.instantiate(buf, go.importObject);
         instance = r.instance;
       }
