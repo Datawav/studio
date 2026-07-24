@@ -356,9 +356,12 @@ window.Canvas = (function () {
     const isText = o.type === "text", canSimplify = o.type === "svg" || o.type === "trace" || o.type === "freehand";
     document.getElementById("cvStyleText").hidden = !isText;
     document.getElementById("cvStyleShape").hidden = !canSimplify;
-    if (isText) { document.getElementById("cvSize").value = o.sizeMM.toFixed(1); document.getElementById("cvEdit").value = o.str; document.getElementById("cvItalic").classList.toggle("on", o.italic); document.getElementById("cvUnder").classList.toggle("on", o.underline); }
+    if (isText) { document.getElementById("cvSize").value = o.sizeMM.toFixed(1); document.getElementById("cvEdit").value = o.str; growEdit(); document.getElementById("cvItalic").classList.toggle("on", o.italic); document.getElementById("cvUnder").classList.toggle("on", o.underline); }
     if (canSimplify) document.getElementById("cvDetail").value = o.eps ? Math.min(100, o.eps * 100) : 0;
   }
+  // A text field holds multiple lines: the editor is a textarea and its
+  // height tracks the content, so it stays one line until Enter adds more.
+  function growEdit() { const f = document.getElementById("cvEdit"); if (!f) return; f.style.height = "auto"; f.style.height = Math.min(f.scrollHeight, 160) + "px"; }
   function focusEdit() { const f = document.getElementById("cvEdit"); if (f) { f.focus(); f.select(); } }
 
   // ---- edits -------------------------------------------------------------
@@ -532,7 +535,7 @@ window.Canvas = (function () {
     on("cvUnder", () => withObj(o => o.underline = !o.underline) || syncStyle());
     on("cvAutoFit", autoFit); on("cvShare", shareURL); on("cvClear", clearAll);
     const sz = document.getElementById("cvSize"); if (sz) sz.oninput = () => withObj(o => o.sizeMM = Math.max(0.8, parseFloat(sz.value) || o.sizeMM));
-    const ed = document.getElementById("cvEdit"); if (ed) ed.oninput = () => { const o = current(); if (o) { o.str = ed.value; render(); recomputeAll(); } };
+    const ed = document.getElementById("cvEdit"); if (ed) ed.oninput = () => { growEdit(); const o = current(); if (o) { o.str = ed.value; render(); recomputeAll(); } };
     if (ed) ed.onchange = commitSnapshot;
     const det = document.getElementById("cvDetail"); if (det) det.oninput = () => setDetail(parseFloat(det.value));
     on("cvSvg", () => document.getElementById("cvSvgFile").click());

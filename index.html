@@ -200,6 +200,11 @@ pre { margin-top: 8px; max-height: 120px; overflow: auto; font: 11px/1.5 ui-mono
 .styleBar label { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); }
 .styleBar input[type=number], .styleBar input[type=text] { font: inherit; font-size: 12.5px; padding: 4px 7px;
   border-radius: 8px; border: 1px solid var(--hair); background: var(--glass); color: var(--ink); width: 58px; }
+/* The canvas text editor is a textarea (multiline), but styled like the
+   toolbar inputs and sized to its content, not the composer's min-height. */
+.styleBar textarea { flex: 1; min-width: 80px; width: auto; min-height: 0; resize: none; overflow-y: hidden;
+  align-self: center; font: inherit; font-size: 12.5px; line-height: 1.35; padding: 4px 7px;
+  border-radius: 8px; border: 1px solid var(--hair); background: var(--glass); color: var(--ink); }
 .styleBar input[type=range] { width: 96px; accent-color: var(--accent); }
 button.ghost { appearance: none; font: inherit; font-size: 12.5px; padding: 7px 12px; border-radius: 10px;
   border: 1px solid var(--hair); background: var(--glass-2); color: var(--ink); cursor: pointer; }
@@ -277,7 +282,7 @@ SEEDHAMMER</textarea>
             <label>Size <input type="number" id="cvSize" min="1" max="40" step="0.5"> mm</label>
             <button id="cvItalic" title="Italic"><i>i</i></button>
             <button id="cvUnder" title="Underline"><u>U</u></button>
-            <input type="text" id="cvEdit" placeholder="text…" style="flex:1;min-width:80px">
+            <textarea id="cvEdit" rows="1" placeholder="text…"></textarea>
           </span>
           <span id="cvStyleShape" class="grp"><label>Detail <input type="range" id="cvDetail" min="0" max="100" value="0"></label></span>
           <span class="tsep"></span>
