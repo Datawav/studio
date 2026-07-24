@@ -544,6 +544,13 @@ function cells(l){l=l.trim().replace(/^\|/,'').replace(/\|$/,'');return l.split(
 
 // ==== text plate (port of the firmware grid model) ====
 const allowed=new Set(Object.keys(SH.glyphs));
+// The plate font is exactly the 95 printable-ASCII glyphs. Any other rune
+// (accented Latin like éÖ, smart quotes, em-dash, emoji) has no glyph, so a
+// text record carrying it is rejected on the device ("cannot be engraved").
+// charErr returns a message naming the offending runes, or "" if all engrave.
+function charErr(t){const bad=[...new Set([...t].filter(c=>c!=='\n'&&!allowed.has(c)))];
+  if(!bad.length)return'';
+  return'Unsupported char'+(bad.length>1?'s':'')+': '+bad.slice(0,8).join(' ')+(bad.length>8?' …':'')+' — plain ASCII only';}
 function canonical(t){const L=t.replace(/\r\n?/g,'\n').split('\n').map(l=>l.replace(/ +$/,''));while(L.length&&L[L.length-1]==='')L.pop();return L;}
 function engraveSize(lines){const cols=Math.max(1,...lines.map(l=>l.length));return SH.sizes.find(s=>cols<=s.cols&&lines.length<=s.rows)||null;}
 // text-plate geometry for the preview + curves gauges (grid-laid glyphs).
@@ -640,7 +647,9 @@ function recompute(){
       const isCmd=lines.length&&lines[0].startsWith('command: ');
       tCols=Math.max(0,...lines.map(l=>l.length));tRows=lines.length;
       tSize=has?engraveSize(lines):null;
+      const textCharErr=charErr(lines.join('\n'));
       if(has&&isCmd)err='cannot start with "command: "';
+      else if(textCharErr)err=textCharErr;
       else if(has&&!tSize)err='does not fit any plate size';
       segs=tSize?textSegs(lines,tSize):[];
       // text sends the cheap text envelope, not the vector path
@@ -652,9 +661,16 @@ function recompute(){
     } else if(m==='canvas'){
       segs=window.Canvas?window.Canvas.worldSegs():[];
       sendKind='path'; payload=encodePath(segs);
+      const objs=(window.Canvas&&window.Canvas._doc().objects)||[];
+      // collect text recursively: grouped text objects must not slip past the gate
+      const collectText=list=>list.flatMap(o=>o.type==='text'?[o.str||'']:(o.type==='group'?collectText(o.children||[]):[]));
+      err=charErr(collectText(objs).join('\n'))||null;
+      const ce=document.getElementById('cvEdit');if(ce)ce.classList.toggle('bad',!!charErr(ce.value));
     } else if(m==='rich'){
       segs=renderMD(document.getElementById('md').value,parseFloat(document.getElementById('bodyMM').value)||5);
       sendKind='path'; payload=encodePath(segs);
+      err=charErr(document.getElementById('md').value)||null;
+      document.getElementById('md').classList.toggle('bad',!!err);
     } else {
       const t=document.getElementById('svg').value.trim();
       if(t){segs=layout(extractSVG(t),parseFloat(document.getElementById('height').value)||0,
