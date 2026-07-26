@@ -145,6 +145,8 @@ canvas { width: 100%; height: 100%; display: block; border-radius: 16px; }
 .verdict .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); flex: none; }
 .verdict.bad .dot { background: var(--bad); }
 .verdict.bad { color: var(--bad); }
+.verdict.slow { color: var(--accent); font-weight: 500; }
+.verdict.slow .dot { background: var(--accent); }
 .actions { display: flex; gap: 9px; }
 .actions button { flex: 1; appearance: none; font: inherit; font-weight: 550; font-size: 13.5px;
   padding: 11px; border-radius: 13px; border: 1px solid var(--hair); background: var(--glass-2);
@@ -355,6 +357,7 @@ Check plates *yearly*.</textarea>
         <div class="meter"><span class="lbl">strokes</span><div class="track"><div class="fill" id="mStrokes"></div></div><span class="val" id="vStrokes"></span></div>
         <div class="meter" id="mTimeRow"><span class="lbl">time</span><div class="track"><div class="fill" id="mTime"></div></div><span class="val" id="vTime"></span></div>
         <div class="verdict" id="verdict"><span class="dot"></span><span id="verdictText">—</span></div>
+        <div class="verdict slow" id="slowNote" hidden><span class="dot"></span><span>Dense drawing — after the tap the device parses for a while before the preview appears. Wait patiently.</span></div>
         <div class="actions">
           <button class="primary" id="send" disabled>Send</button>
           <button id="copy">Copy</button>
@@ -708,6 +711,7 @@ function gauges(m,segs,err,tCols,tRows,tSize){
   const strokes=exact&&exact.strokes!=null?exact.strokes:segs.filter(s=>s.op==='M').length;
   const mins=exact&&exact.seconds!=null?exact.seconds/60:(pathLen(segs)/ENGRAVE_MM_S)/60;
   const capErr=exact?exact.error:'';
+  document.getElementById('slowNote').hidden=!(exact&&exact.knots>20000&&!capErr);
   const inPlate=!b.empty&&b.minX>=MARGIN_MM-1e-6&&b.minY>=MARGIN_MM-1e-6&&b.maxX<=PLATE_MM-MARGIN_MM+1e-6&&b.maxY<=PLATE_MM-MARGIN_MM+1e-6;
   const set=(fill,val,label,cap)=>{const el=document.getElementById(fill);const pct=cap?Math.min(100,100*val/cap):0;
     el.style.width=pct+'%';el.classList.toggle('over',val>cap);
@@ -766,8 +770,11 @@ function selectTab(m){
 }
 document.querySelectorAll('[role=tab]').forEach(t=>t.onclick=()=>selectTab(t.dataset.mode));
 document.getElementById('text').addEventListener('input',recompute);
-document.getElementById('md').addEventListener('input',recompute);
-document.getElementById('bodyMM').addEventListener('input',recompute);
+// Rich recompute runs the full wasm render+report per change; debounce
+// typing so dense documents stay editable (the canvas debounces likewise).
+let mdT=null;const mdRecompute=()=>{clearTimeout(mdT);mdT=setTimeout(recompute,150);};
+document.getElementById('md').addEventListener('input',mdRecompute);
+document.getElementById('bodyMM').addEventListener('input',mdRecompute);
 document.getElementById('grid').addEventListener('change',recompute);
 document.getElementById('emuFeed').onclick=()=>window.SeedHammerEmu.feed(payload);
 document.getElementById('copy').onclick=async()=>{if(!payload)return;await navigator.clipboard.writeText(sendKind==='text'?new TextDecoder().decode(payload):b64(payload));status('Copied ✓');};
