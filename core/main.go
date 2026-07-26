@@ -32,10 +32,7 @@ var sh2 = engrave.SH2Params
 // to its limit with the firmware's own numbers.
 func report(this js.Value, args []js.Value) any {
 	res := map[string]any{
-		"maxStrokes":     curves.MaxStrokes,
-		"maxKnots":       curves.MaxKnots,
-		"maxStrokeKnots": curves.MaxStrokeKnots,
-		"maxSeconds":     curves.MaxMinutes * 60,
+		"maxSeconds": curves.MaxMinutes * 60,
 	}
 	if len(args) < 1 {
 		res["error"] = "no payload"
@@ -107,6 +104,10 @@ const (
 	encodeUPMM   = 10
 	encodeStroke = 3
 )
+
+// orderMaxStrokes bounds the O(strokes^2) travel ordering, matching
+// cmd/svgplate; far above any drawing the duration cap admits.
+const orderMaxStrokes = 4096
 
 // encode turns a drawing into a version 2 binary curves payload. It takes
 // an ASCII M/L/Q/C path in millimetres (the editor's world units), so the
@@ -192,7 +193,7 @@ func encodeGroups(this js.Value, args []js.Value) any {
 	}
 	// The same quadratic-ordering guard as cmd/svgplate: skip reordering
 	// for inputs validation is about to reject anyway.
-	if strokes <= 2*curves.MaxStrokes {
+	if strokes <= orderMaxStrokes {
 		groups = curves.OrderGroups(groups)
 	}
 	payload, err := curves.EncodeGroups(encodeUPMM, encodeStroke, groups)
@@ -236,7 +237,7 @@ func encodeMarkdown(this js.Value, args []js.Value) any {
 		}
 	}
 	// The same quadratic-ordering guard as cmd/svgplate.
-	if strokes <= 2*curves.MaxStrokes {
+	if strokes <= orderMaxStrokes {
 		cg = curves.OrderGroups(cg)
 	}
 	payload, err := curves.EncodeGroups(encodeUPMM, encodeStroke, cg)

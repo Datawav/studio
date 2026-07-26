@@ -406,7 +406,7 @@ Check plates *yearly*.</textarea>
 // ---- caps from generated glyphs.js (single-sourced from the curves package) ----
 const PLATE_MM = SH.plateMM, MARGIN_MM = SH.marginMM;
 const UPMM = 100, STROKE_U = 30, FIT_MM = PLATE_MM - 2 * MARGIN_MM;
-const CAP = { bytes: SH.payloadCap, strokes: SH.maxStrokes, minutes: SH.maxMinutes };
+const CAP = { bytes: SH.payloadCap, minutes: SH.maxMinutes };
 const ITALIC = 0.21, LSP = 1.18, CPAD = 1.2, RPAD = 0.6;
 // SH2 engrave speed model, enough for a time estimate (mm/s under the caps).
 const ENGRAVE_MM_S = 8;
@@ -713,7 +713,9 @@ function gauges(m,segs,err,tCols,tRows,tSize){
     el.style.width=pct+'%';el.classList.toggle('over',val>cap);
     document.getElementById(fill.replace('m','v'))&&(document.getElementById('v'+fill.slice(1)).textContent=label);};
   set('mBytes',bytes,`${bytes} / ${CAP.bytes}`,CAP.bytes);
-  set('mStrokes',strokes,`${strokes} / ${CAP.strokes}`,CAP.strokes);
+  // strokes are informational since the structural caps retired;
+  // duration is the complexity gate
+  set('mStrokes',strokes,`${strokes}`,0);
   // text mode: time/strokes come from the grid geometry but the send is cheap text; keep gauges informative
   const showTime=!b.empty;
   document.getElementById('mTimeRow').style.opacity=showTime?1:.4;
@@ -724,13 +726,13 @@ function gauges(m,segs,err,tCols,tRows,tSize){
   const overB=bytes>CAP.bytes;
   // Byte cap is a JS check (curves.Validate does not cover it); everything
   // else comes from the firmware report when loaded, else a JS approximation.
-  const pathBad=exact?(overB||!!capErr):(overB||strokes>CAP.strokes||!inPlate);
+  const pathBad=exact?(overB||!!capErr):(overB||!inPlate);
   ok=!err&&!empty&&!(m!=='text'&&pathBad);
   const v=document.getElementById('verdict'),vt=document.getElementById('verdictText');
   if(err){v.className='verdict bad';vt.textContent=err;}
   else if(empty){v.className='verdict';vt.textContent='Nothing to engrave yet';}
   else if(m==='text'){v.className='verdict';vt.textContent='Fits — sent as firmware text';}
-  else if(!ok){v.className='verdict bad';vt.textContent=overB?'Too large for the tag':(capErr?capErr.replace(/^curves: /,''):(strokes>CAP.strokes?'Too many strokes':'Runs outside the plate'));}
+  else if(!ok){v.className='verdict bad';vt.textContent=overB?'Too large for the tag':(capErr?capErr.replace(/^curves: /,''):'Runs outside the plate');}
   else{v.className='verdict';vt.textContent='Fits the plate and the tag';}
   document.getElementById('send').disabled=!ok||!(bridgeUp||'NDEFReader'in window);
   document.getElementById('copy').disabled=!payload;
