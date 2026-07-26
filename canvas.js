@@ -123,8 +123,11 @@ window.Canvas = (function () {
     let idx = raw; for (let k = 0; k < li; k++) idx += lines[k].length + 1;
     return idx;
   }
-  // un-centred glyph geometry in the object's local space
-  function layoutGlyphs(o) {
+  // un-centred glyph geometry in the object's local space, kept as placed
+  // groups: one {at, segs} per glyph or underline rule, segs local to at.
+  // The payload dictionary dedups on identical local segs, so every glyph
+  // of one size and style ships its outline once.
+  function layoutGroups(o) {
     const cellH = SH.height, asc = SH.ascent, adv = SH.advance, sc = o.sizeMM / cellH;
     const out = [], lines = (o.str || "").split("\n");
     for (let li = 0; li < lines.length; li++) {
@@ -136,15 +139,21 @@ window.Canvas = (function () {
         const italic = run.italic !== !!o.italic, underline = run.underline !== !!o.underline, rx0 = x;
         for (const ch of run.text) {
           const g = gseg(ch);
-          if (g) for (const s of g) out.push(mapSeg(s, ([px, py]) => {
+          if (g && g.length) out.push({ at: [x, y], segs: g.map(s => mapSeg(s, ([px, py]) => {
             let fx = px; if (italic) fx += ITALIC * (asc - py);
-            return [x + fx * sc, y + py * sc];
-          }));
+            return [fx * sc, py * sc];
+          })) });
           x += adv * sc;
         }
-        if (underline && x > rx0) { const uy = y + asc * sc + o.sizeMM * 0.1; out.push({ op: "M", p: [[rx0, uy]] }, { op: "L", p: [[x, uy]] }); }
+        if (underline && x > rx0) { const uy = y + asc * sc + o.sizeMM * 0.1; out.push({ at: [rx0, uy], segs: [{ op: "M", p: [[0, 0]] }, { op: "L", p: [[x - rx0, 0]] }] }); }
       }
     }
+    return out;
+  }
+  // the flat view of the same layout, for rendering, bounds and caret math
+  function layoutGlyphs(o) {
+    const out = [];
+    for (const g of layoutGroups(o)) for (const s of g.segs) out.push(mapSeg(s, ([x, y]) => [g.at[0] + x, g.at[1] + y]));
     return out;
   }
   // local half-extents for handles
@@ -157,6 +166,32 @@ window.Canvas = (function () {
   function worldSegs() {
     const out = [];
     for (const o of doc.objects) { const m = affine(o.tf); for (const s of localPaths(o)) out.push(mapSeg(s, p => apply(m, p))); }
+    return out;
+  }
+  // worldSegs with structure kept for the payload dictionary: one
+  // {at, segs} per placed shape in plate mm — per glyph for text, per
+  // object otherwise. Local points carry only the transform's linear part
+  // (rotation/scale/mirror); at carries the translation, so duplicated
+  // objects and repeated glyphs stay byte-identical and dedup. Transforms
+  // compose as functions, exactly as the nested-group render does.
+  function worldGroups() {
+    const out = [];
+    const walk = (o, outer) => {
+      const m = affine(o.tf), t = p => outer(apply(m, p));
+      if (o.type === "group") { for (const ch of o.children) walk(ch, t); return; }
+      const o0 = t([0, 0]), lin = p => { const q = t(p); return [q[0] - o0[0], q[1] - o0[1]]; };
+      if (o.type === "text") {
+        const [cx, cy] = textCentre(o);
+        for (const g of layoutGroups(o)) out.push({
+          at: t([g.at[0] - cx, g.at[1] - cy]),
+          segs: g.segs.map(s => mapSeg(s, lin)),
+        });
+        return;
+      }
+      const segs = localPaths(o);
+      if (segs.length) out.push({ at: o0, segs: segs.map(s => mapSeg(s, lin)) });
+    };
+    for (const o of doc.objects) walk(o, p => p);
     return out;
   }
 
@@ -762,6 +797,6 @@ window.Canvas = (function () {
       .then(segs => insertTrace(segs)).catch(e => setStatus("Trace: " + (e.message || e)));
   }
 
-  return { init, worldSegs, segs: worldSegs, refresh: () => { render(); syncStyle(); recomputeAll(); }, insertSVG, insertTrace, _doc: () => doc };
+  return { init, worldSegs, worldGroups, segs: worldSegs, refresh: () => { render(); syncStyle(); recomputeAll(); }, insertSVG, insertTrace, _doc: () => doc };
 })();
 document.addEventListener("DOMContentLoaded", () => window.Canvas.init());

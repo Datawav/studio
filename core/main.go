@@ -140,6 +140,69 @@ func encode(this js.Value, args []js.Value) any {
 	return js.ValueOf(map[string]any{"payload": arr, "error": ""})
 }
 
+// encodeGroups is encode for placed shape groups: repeated shapes — every
+// instance of a glyph, duplicated objects — are carried once in the payload
+// dictionary and stamped by placement. It takes a JSON array of
+// {"at":[x,y],"d":"M…"} with d the shape's own M/L/Q/C path in millimetres,
+// local to at. The local frame and the placement quantize separately (the
+// contract that keeps instances byte-identical, matching cmd/svgplate), then
+// the firmware's OrderGroups + EncodeGroups run unchanged. It returns
+// {payload: Uint8Array} or {error: string}.
+func encodeGroups(this js.Value, args []js.Value) any {
+	if len(args) < 1 {
+		return js.ValueOf(map[string]any{"error": "no groups"})
+	}
+	var in []struct {
+		At [2]float64 `json:"at"`
+		D  string     `json:"d"`
+	}
+	if err := json.Unmarshal([]byte(args[0].String()), &in); err != nil {
+		return js.ValueOf(map[string]any{"error": err.Error()})
+	}
+	scale := func(v float64) int { return int(math.Round(v * encodeUPMM)) }
+	groups := make([]curves.Group, 0, len(in))
+	strokes := 0
+	for _, g := range in {
+		it := svgpath.NewIter(g.D, 0, 0, scale)
+		var segs []svgpath.Segment
+		for {
+			s, ok := it.Next()
+			if !ok {
+				break
+			}
+			if s.Op == svgpath.MoveTo {
+				strokes++
+			}
+			segs = append(segs, s)
+		}
+		if err := it.Err(); err != nil {
+			return js.ValueOf(map[string]any{"error": err.Error()})
+		}
+		if len(segs) == 0 {
+			continue
+		}
+		groups = append(groups, curves.Group{
+			At:   bezier.Pt(scale(g.At[0]), scale(g.At[1])),
+			Segs: segs,
+		})
+	}
+	if len(groups) == 0 {
+		return js.ValueOf(map[string]any{"error": "no groups"})
+	}
+	// The same quadratic-ordering guard as cmd/svgplate: skip reordering
+	// for inputs validation is about to reject anyway.
+	if strokes <= 2*curves.MaxStrokes {
+		groups = curves.OrderGroups(groups)
+	}
+	payload, err := curves.EncodeGroups(encodeUPMM, encodeStroke, groups)
+	if err != nil {
+		return js.ValueOf(map[string]any{"error": err.Error()})
+	}
+	arr := js.Global().Get("Uint8Array").New(len(payload))
+	js.CopyBytesToJS(arr, payload)
+	return js.ValueOf(map[string]any{"payload": arr, "error": ""})
+}
+
 // argBytes reads a JS payload argument, whether a string (a text payload
 // or a v1 ASCII path) or a Uint8Array (a v2 binary path).
 func argBytes(arg js.Value) []byte {
@@ -154,6 +217,7 @@ func argBytes(arg js.Value) []byte {
 func main() {
 	js.Global().Set("studioCoreReport", js.FuncOf(report))
 	js.Global().Set("studioCoreEncode", js.FuncOf(encode))
+	js.Global().Set("studioCoreEncodeGroups", js.FuncOf(encodeGroups))
 	js.Global().Set("studioCoreReady", js.ValueOf(true))
 	if cb := js.Global().Get("studioCoreOnReady"); cb.Type() == js.TypeFunction {
 		cb.Invoke()
