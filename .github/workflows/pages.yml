@@ -52,30 +52,20 @@ jobs:
         with:
           go-version-file: _firmware/go.mod
 
-      # Non-fatal: the editor + text composer are pure static files that must
-      # publish regardless. The emu is a GOOS=js compile against a pinned
-      # firmware, so it only breaks on a bad pin bump or an unreachable
-      # firmware checkout — neither of which should take the core site down.
-      # A failure is surfaced as a warning; the SeedHammer tab then shows a
-      # load error until emu.wasm is present.
+      # Fatal: the wasm modules are load-bearing now — the canvas dictionary
+      # payloads, the Rich pane's markdown engine and the firmware-exact
+      # gauges all live in studio-core.wasm, and the SeedHammer tab in
+      # emu.wasm. A deploy without them would silently regress the live
+      # site (a warning-masked build failure shipped exactly that risk),
+      # so a broken pin or firmware checkout must fail the workflow, not
+      # publish a hollow site.
       - name: Build the SeedHammer emulator (emu.wasm + wasm_exec.js)
-        run: |
-          if FIRMWARE_DIR="$GITHUB_WORKSPACE/_firmware" ./emu/build.sh; then
-            echo "emu.wasm built."
-          else
-            echo "::warning::SeedHammer emu.wasm failed to build against firmware ${FIRMWARE_REF}. The editor and text composer still deploy; the SeedHammer tab shows a load error until this is fixed."
-          fi
+        run: FIRMWARE_DIR="$GITHUB_WORKSPACE/_firmware" ./emu/build.sh
 
-      # The curves cost model for the canvas editor's firmware-exact gauges.
-      # Same pinned firmware; non-fatal — the editor still deploys and the
-      # path-mode gauges fall back to a JS estimate if this is absent.
+      # The curves cost model + encoders for the editor. Same pinned
+      # firmware, same fatality.
       - name: Build the curves cost model (studio-core.wasm)
-        run: |
-          if FIRMWARE_DIR="$GITHUB_WORKSPACE/_firmware" ./core/build.sh; then
-            echo "studio-core.wasm built."
-          else
-            echo "::warning::studio-core.wasm failed to build against firmware ${FIRMWARE_REF}. The editor still deploys; the canvas gauges fall back to a JS estimate."
-          fi
+        run: FIRMWARE_DIR="$GITHUB_WORKSPACE/_firmware" ./core/build.sh
 
       - name: Assemble Pages tree
         run: |

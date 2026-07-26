@@ -18,6 +18,7 @@ import (
 	"seedhammer.com/bspline"
 	"seedhammer.com/curves"
 	"seedhammer.com/engrave"
+	"seedhammer.com/richtext"
 	"seedhammer.com/svgpath"
 )
 
@@ -203,6 +204,50 @@ func encodeGroups(this js.Value, args []js.Value) any {
 	return js.ValueOf(map[string]any{"payload": arr, "error": ""})
 }
 
+// encodeMarkdown renders the markdown subset through the firmware's own
+// rich-text engine — seedhammer.com/richtext, the exact renderer behind
+// svgplate -text — and encodes the placed glyph groups with the payload
+// dictionary. It takes (markdown string, body size in mm) and returns
+// {payload: Uint8Array, warning} or {error}; a warning reports runes the
+// font cannot engrave while the rest of the document still renders,
+// matching svgplate's warn-and-continue behavior.
+func encodeMarkdown(this js.Value, args []js.Value) any {
+	if len(args) < 2 {
+		return js.ValueOf(map[string]any{"error": "no document"})
+	}
+	groups, err := richtext.Render(args[0].String(), args[1].Float())
+	warning := ""
+	if err != nil {
+		if groups == nil {
+			return js.ValueOf(map[string]any{"error": err.Error()})
+		}
+		warning = err.Error()
+	}
+	if len(groups) == 0 {
+		return js.ValueOf(map[string]any{"error": "empty document", "warning": warning})
+	}
+	cg := richtext.Groups(groups, encodeUPMM)
+	strokes := 0
+	for _, g := range cg {
+		for _, s := range g.Segs {
+			if s.Op == svgpath.MoveTo {
+				strokes++
+			}
+		}
+	}
+	// The same quadratic-ordering guard as cmd/svgplate.
+	if strokes <= 2*curves.MaxStrokes {
+		cg = curves.OrderGroups(cg)
+	}
+	payload, err := curves.EncodeGroups(encodeUPMM, encodeStroke, cg)
+	if err != nil {
+		return js.ValueOf(map[string]any{"error": err.Error()})
+	}
+	arr := js.Global().Get("Uint8Array").New(len(payload))
+	js.CopyBytesToJS(arr, payload)
+	return js.ValueOf(map[string]any{"payload": arr, "error": "", "warning": warning})
+}
+
 // argBytes reads a JS payload argument, whether a string (a text payload
 // or a v1 ASCII path) or a Uint8Array (a v2 binary path).
 func argBytes(arg js.Value) []byte {
@@ -218,6 +263,7 @@ func main() {
 	js.Global().Set("studioCoreReport", js.FuncOf(report))
 	js.Global().Set("studioCoreEncode", js.FuncOf(encode))
 	js.Global().Set("studioCoreEncodeGroups", js.FuncOf(encodeGroups))
+	js.Global().Set("studioCoreEncodeMarkdown", js.FuncOf(encodeMarkdown))
 	js.Global().Set("studioCoreReady", js.ValueOf(true))
 	if cb := js.Global().Get("studioCoreOnReady"); cb.Type() == js.TypeFunction {
 		cb.Invoke()

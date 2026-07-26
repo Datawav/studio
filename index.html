@@ -253,6 +253,7 @@ button.ghost.danger:hover { border-color: var(--bad); color: var(--bad); }
     <div class="seg" role="tablist">
       <button role="tab" aria-selected="true" data-mode="canvas">Canvas</button>
       <button role="tab" aria-selected="false" data-mode="text">Text</button>
+      <button role="tab" aria-selected="false" data-mode="rich">Rich</button>
       <button role="tab" aria-selected="false" data-mode="emu">SeedHammer</button>
     </div>
     <button class="install" id="install">Install</button>
@@ -272,6 +273,7 @@ SEEDHAMMER</textarea>
         <div class="tools" id="cvTools">
           <button data-tool="select" class="on" title="Select (V)">▲</button>
           <button data-tool="text" title="Text (T)">T</button>
+          <button data-tool="table" title="Table (B)">⊞</button>
           <button data-tool="rect" title="Rectangle (R)">▭</button>
           <button data-tool="ellipse" title="Ellipse (O)">◯</button>
           <button data-tool="line" title="Line (L)">╱</button>
@@ -290,6 +292,12 @@ SEEDHAMMER</textarea>
             <label>Size <input type="number" id="cvSize" min="1" max="40" step="0.5"> mm</label>
             <button id="cvItalic" title="Italic"><i>i</i></button>
             <button id="cvUnder" title="Underline"><u>U</u></button>
+          </span>
+          <span id="cvStyleTable" class="grp" hidden>
+            <button id="cvRowAdd" title="Add row">+row</button>
+            <button id="cvRowDel" title="Remove last row">−row</button>
+            <button id="cvColAdd" title="Add column">+col</button>
+            <button id="cvColDel" title="Remove last column">−col</button>
           </span>
           <span id="cvStyleShape" class="grp" hidden><label>Detail <input type="range" id="cvDetail" min="0" max="100" value="0"></label></span>
           <span class="tsep"></span>
@@ -310,6 +318,29 @@ SEEDHAMMER</textarea>
         </div>
         <input type="file" id="cvSvgFile" accept=".svg,image/svg+xml" hidden>
         <input type="file" id="cvImgFile" accept="image/*" hidden>
+      </div>
+      <div data-pane="rich" hidden style="flex-direction:column;flex:1">
+        <textarea id="md" spellcheck="false"># Cold Storage
+## family vault - 2 of 3
+
+Keep *offline*. Verify _keys_.
+
+| Share | Where | Holder |
+| - | - | - |
+| 1 | Home safe | *M* |
+| 2 | Bank box | *A* |
+| 3 | Lawyer | *S* |
+
+### Recovery
+Any _two_ shares spend.
+Check plates *yearly*.</textarea>
+        <div class="row"><label>Body size <input type="number" id="bodyMM" value="4" min="2" max="20" step="0.5"> mm</label><span class="hint" id="richHint"></span></div>
+        <div class="cheat">
+          <span><code># H</code>…<code>##### H</code> headings</span>
+          <span><code>*x*</code> italic</span>
+          <span><code>_x_</code> underline</span>
+          <span><code>| a | b |</code> + <code>| - | - |</code> table</span>
+        </div>
       </div>
     </section>
 
@@ -586,7 +617,7 @@ function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,
 let payload=null, ok=false, sendKind='path';
 // Text/Canvas compose a payload; SeedHammer is a device tab that
 // consumes the last composed payload rather than editing it.
-const EDITOR_MODES=['text','canvas'];
+const EDITOR_MODES=['text','canvas','rich'];
 function mode(){return document.querySelector('[role=tab][aria-selected=true]').dataset.mode;}
 function recompute(){
   const m=mode();
@@ -617,8 +648,35 @@ function recompute(){
       sendKind='path'; payload=segs.length?encodeGroups(window.Canvas.worldGroups()):null;
       const objs=(window.Canvas&&window.Canvas._doc().objects)||[];
       // collect text recursively: grouped text objects must not slip past the gate
-      const collectText=list=>list.flatMap(o=>o.type==='text'?[o.str||'']:(o.type==='group'?collectText(o.children||[]):[]));
+      const collectText=list=>list.flatMap(o=>o.type==='text'?[o.str||'']:(o.type==='group'?collectText(o.children||[]):(o.type==='table'?(o.cells||[]).flat():[])));
       err=charErr(collectText(objs).join('\n'))||null;
+    } else if(m==='rich'){
+      // The firmware's own markdown renderer runs in studio-core.wasm
+      // (seedhammer.com/richtext — the engine behind svgplate -text), so
+      // the payload is byte-identical to the host converter's and there
+      // is no JS layout to drift. The pane needs the wasm; until it
+      // loads there is nothing to preview.
+      const md=document.getElementById('md').value;
+      const bodyMM=+document.getElementById('bodyMM').value||4;
+      sendKind='path'; payload=null;
+      const hint=document.getElementById('richHint');
+      if(window.studioCoreEncodeMarkdown){
+        const r=window.studioCoreEncodeMarkdown(md,bodyMM);
+        if(r.error)err=r.error;
+        else{
+          payload=r.payload;if(r.warning)err=r.warning;
+          // A payload the firmware's parse rejects (report carries an
+          // error but no plan) must surface as the verdict, not fall
+          // through to the neutral empty-preview branch — and must not
+          // stay exportable through Copy/Download.
+          if(!err&&window.studioCoreReport){
+            const rep=window.studioCoreReport(payload);
+            if(rep&&rep.error&&!rep.plan){err=rep.error.replace(/^curves: /,'');payload=null;}
+          }
+        }
+        hint.textContent=err||'';
+      }else hint.textContent='engraving engine loading…';
+      hint.className='hint'+(err?' bad':'');
     }
   }catch(e){err=String(e.message||e);segs=[];payload=null;}
   const gridCtx=m==='text'?(tSize||SH.sizes[SH.sizes.length-1]):null;
@@ -630,7 +688,8 @@ function recompute(){
     if(rep&&rep.plan){const pl=plannedToSegs(rep.plan);if(pl&&pl.length)drawSegs=pl;}
   }
   draw(drawSegs,gridCtx);
-  gauges(m,segs,err,tCols,tRows,tSize);
+  // rich has no JS-side segs; gauge bounds come from the planned spline
+  gauges(m,m==='rich'?drawSegs:segs,err,tCols,tRows,tSize);
 }
 // planned strokes (JSON [[[x,y],...],...] in mm) -> M/L segs for draw().
 function plannedToSegs(json){
@@ -693,7 +752,7 @@ function selectTab(m){
   });
   if(editing){
     document.querySelectorAll('[data-pane]').forEach(p=>{p.hidden=p.dataset.pane!==m;p.style.display=p.hidden?'none':'flex';});
-    document.getElementById('editorTitle').textContent={text:'Text plate',canvas:'Canvas'}[m];
+    document.getElementById('editorTitle').textContent={text:'Text plate',canvas:'Canvas',rich:'Rich text'}[m];
     // the cell grid is a text-plate concept; hide the toggle elsewhere
     document.getElementById('gridChip').style.display=m==='text'?'inline-flex':'none';
     recompute();
@@ -705,6 +764,8 @@ function selectTab(m){
 }
 document.querySelectorAll('[role=tab]').forEach(t=>t.onclick=()=>selectTab(t.dataset.mode));
 document.getElementById('text').addEventListener('input',recompute);
+document.getElementById('md').addEventListener('input',recompute);
+document.getElementById('bodyMM').addEventListener('input',recompute);
 document.getElementById('grid').addEventListener('change',recompute);
 document.getElementById('emuFeed').onclick=()=>window.SeedHammerEmu.feed(payload);
 document.getElementById('copy').onclick=async()=>{if(!payload)return;await navigator.clipboard.writeText(sendKind==='text'?new TextDecoder().decode(payload):b64(payload));status('Copied ✓');};

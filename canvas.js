@@ -26,6 +26,8 @@ window.Canvas = (function () {
   let tool = "select";
   let editId = null, editCaret = 0;    // text object being edited in place + caret index
   let editTA = null, editDrag = null;  // the editor's capture textarea + mouse-selection anchor
+  let editCell = null;                 // {r, c} when the edited object is a table
+  let closeEdit = null;                // commits + closes the open editor synchronously
   let counter = 0;
   const undo = [], redo = [];
   let suppressSnapshot = false;
@@ -42,6 +44,7 @@ window.Canvas = (function () {
   function localPaths(o) {
     switch (o.type) {
       case "text": return textLocal(o);
+      case "table": return tableLocal(o);
       case "rect": return centered(poly([[0, 0], [o.w, 0], [o.w, o.h], [0, o.h]], 1));
       case "ellipse": return ell(0, 0, o.w / 2, o.h / 2);
       case "group": { const out = []; for (const ch of o.children) { const m = affine(ch.tf); for (const s of localPaths(ch)) out.push(mapSeg(s, p => apply(m, p))); } return out; }
@@ -123,42 +126,105 @@ window.Canvas = (function () {
     let idx = raw; for (let k = 0; k < li; k++) idx += lines[k].length + 1;
     return idx;
   }
-  // un-centred glyph geometry in the object's local space, kept as placed
-  // groups: one {at, segs} per glyph or underline rule, segs local to at.
-  // The payload dictionary dedups on identical local segs, so every glyph
-  // of one size and style ships its outline once.
+  // One styled line of text at (ox, oy) in the object's local space,
+  // appended to out as placed groups: one {at, segs} per glyph or
+  // underline rule, segs local to at. The payload dictionary dedups on
+  // identical local segs, so every glyph of one size and style ships its
+  // outline once. *x* toggles italic and _x_ underline (splitFmt), XORed
+  // with the base flags so toolbar toggles and inline markup both apply.
+  // Returns the end pen x.
+  function lineGroups(str, sizeMM, ox, oy, baseIt, baseUn, out) {
+    const asc = SH.ascent, adv = SH.advance, sc = sizeMM / SH.height;
+    let x = ox;
+    for (const run of splitFmt(str)) {
+      const italic = run.italic !== !!baseIt, underline = run.underline !== !!baseUn, rx0 = x;
+      for (const ch of run.text) {
+        const g = gseg(ch);
+        if (g && g.length) out.push({ at: [x, oy], segs: g.map(s => mapSeg(s, ([px, py]) => {
+          let fx = px; if (italic) fx += ITALIC * (asc - py);
+          return [fx * sc, py * sc];
+        })) });
+        x += adv * sc;
+      }
+      if (underline && x > rx0) { const uy = oy + asc * sc + sizeMM * 0.1; out.push({ at: [rx0, uy], segs: [{ op: "M", p: [[0, 0]] }, { op: "L", p: [[x - rx0, 0]] }] }); }
+    }
+    return x;
+  }
+  // un-centred glyph geometry in the object's local space, as placed groups
   function layoutGroups(o) {
-    const cellH = SH.height, asc = SH.ascent, adv = SH.advance, sc = o.sizeMM / cellH;
     const out = [], lines = (o.str || "").split("\n");
     for (let li = 0; li < lines.length; li++) {
-      let x = 0; const y = li * o.sizeMM * LSP;
-      // *x* toggles italic and _x_ underline within a line (splitFmt, the same
-      // markup the Rich tab uses), XORed with the object's own italic/underline
-      // so the toolbar toggles and inline markup both apply.
-      for (const run of splitFmt(lines[li])) {
-        const italic = run.italic !== !!o.italic, underline = run.underline !== !!o.underline, rx0 = x;
-        for (const ch of run.text) {
-          const g = gseg(ch);
-          if (g && g.length) out.push({ at: [x, y], segs: g.map(s => mapSeg(s, ([px, py]) => {
-            let fx = px; if (italic) fx += ITALIC * (asc - py);
-            return [fx * sc, py * sc];
-          })) });
-          x += adv * sc;
-        }
-        if (underline && x > rx0) { const uy = y + asc * sc + o.sizeMM * 0.1; out.push({ at: [rx0, uy], segs: [{ op: "M", p: [[0, 0]] }, { op: "L", p: [[x - rx0, 0]] }] }); }
+      lineGroups(lines[li], o.sizeMM, 0, li * o.sizeMM * LSP, o.italic, o.underline, out);
+    }
+    return out;
+  }
+  // the flat view of a grouped layout, for rendering, bounds and caret math
+  function flattenGroups(groups) {
+    const out = [];
+    for (const g of groups) for (const s of g.segs) out.push(mapSeg(s, ([x, y]) => [g.at[0] + x, g.at[1] + y]));
+    return out;
+  }
+  function layoutGlyphs(o) { return flattenGroups(layoutGroups(o)); }
+
+  // ---- tables ------------------------------------------------------------
+  // A WYSIWYG table: cells of styled text in a grid of rules, laid out
+  // with the same pads and line spacing as richtext.go's pipe tables but
+  // edited on the plate, cell by cell. Column widths follow the widest
+  // cell, so the table reflows as you type — the preview is the layout.
+  function measureVis(str, sc) { let n = 0; for (const ch of str) if (ch !== "*" && ch !== "_") n++; return n * SH.advance * sc; }
+  function tableMetrics(o) {
+    const sc = o.sizeMM / SH.height;
+    const rows = o.cells.length, cols = Math.max(1, ...o.cells.map(r => r.length));
+    const widths = [];
+    for (let c = 0; c < cols; c++) {
+      let w = 0;
+      for (const row of o.cells) w = Math.max(w, measureVis(row[c] || "", sc));
+      widths.push(w + 2 * CPAD);
+    }
+    const rowH = o.sizeMM * LSP + 2 * RPAD;
+    return { sc, rows, cols, widths, rowH, W: widths.reduce((a, b) => a + b, 0), H: rowH * rows };
+  }
+  function tableGroups(o) {
+    const m = tableMetrics(o), out = [];
+    const rule = (x, y, dx, dy) => out.push({ at: [x, y], segs: [{ op: "M", p: [[0, 0]] }, { op: "L", p: [[dx, dy]] }] });
+    // rules at every row and column boundary; equal spans share one
+    // dictionary shape
+    for (let r = 0; r <= m.rows; r++) rule(0, r * m.rowH, m.W, 0);
+    let vx = 0; rule(0, 0, 0, m.H);
+    for (const w of m.widths) { vx += w; rule(vx, 0, 0, m.H); }
+    for (let r = 0; r < m.rows; r++) {
+      let cx = 0;
+      for (let c = 0; c < m.cols; c++) {
+        const cell = (o.cells[r] || [])[c] || "";
+        if (cell) lineGroups(cell, o.sizeMM, cx + CPAD, r * m.rowH + RPAD, false, false, out);
+        cx += m.widths[c];
       }
     }
     return out;
   }
-  // the flat view of the same layout, for rendering, bounds and caret math
-  function layoutGlyphs(o) {
-    const out = [];
-    for (const g of layoutGroups(o)) for (const s of g.segs) out.push(mapSeg(s, ([x, y]) => [g.at[0] + x, g.at[1] + y]));
-    return out;
+  function tableCentre(o) { const m = tableMetrics(o); return [m.W / 2, m.H / 2]; }
+  function tableLocal(o) {
+    const [cx, cy] = tableCentre(o);
+    return flattenGroups(tableGroups(o)).map(s => mapSeg(s, ([x, y]) => [x - cx, y - cy]));
+  }
+  // a cell's text origin (padding applied) in centred local space
+  function cellOrigin(o, r, c) {
+    const m = tableMetrics(o), [cx, cy] = tableCentre(o);
+    let x = 0; for (let i = 0; i < c; i++) x += m.widths[i];
+    return { x: x + CPAD - cx, y: r * m.rowH + RPAD - cy };
+  }
+  // the cell under a centred-local point
+  function cellAt(o, lx, ly) {
+    const m = tableMetrics(o), [cx, cy] = tableCentre(o);
+    const r = Math.max(0, Math.min(m.rows - 1, Math.floor((ly + cy) / m.rowH)));
+    let c = 0, ax = 0;
+    for (; c < m.cols - 1; c++) { ax += m.widths[c]; if (lx + cx < ax) break; }
+    return { r, c };
   }
   // local half-extents for handles
   function halfExtent(o) {
     if (o.type === "rect" || o.type === "ellipse") return { hw: o.w / 2, hh: o.h / 2 };
+    if (o.type === "table") { const m = tableMetrics(o); return { hw: m.W / 2, hh: m.H / 2 }; }
     const b = flatBounds(localPaths(o));
     if (b.empty) return { hw: 1, hh: 1 };
     return { hw: Math.max(b.w / 2, 0), hh: Math.max(b.h / 2, 0) };
@@ -180,9 +246,9 @@ window.Canvas = (function () {
       const m = affine(o.tf), t = p => outer(apply(m, p));
       if (o.type === "group") { for (const ch of o.children) walk(ch, t); return; }
       const o0 = t([0, 0]), lin = p => { const q = t(p); return [q[0] - o0[0], q[1] - o0[1]]; };
-      if (o.type === "text") {
-        const [cx, cy] = textCentre(o);
-        for (const g of layoutGroups(o)) out.push({
+      if (o.type === "text" || o.type === "table") {
+        const [cx, cy] = o.type === "text" ? textCentre(o) : tableCentre(o);
+        for (const g of o.type === "text" ? layoutGroups(o) : tableGroups(o)) out.push({
           at: t([g.at[0] - cx, g.at[1] - cy]),
           segs: g.segs.map(s => mapSeg(s, lin)),
         });
@@ -224,6 +290,22 @@ window.Canvas = (function () {
     gUI.textContent = "";
     if (editId != null) {
       const eo = doc.objects.find(x => x.id === editId);
+      if (eo && editCell) {
+        // table cell: caret and selection in the cell's advance frame
+        const m = affine(eo.tf), sc = eo.sizeMM / SH.height, adv = SH.advance * sc;
+        const co = cellOrigin(eo, editCell.r, editCell.c);
+        const str = (eo.cells[editCell.r] || [])[editCell.c] || "";
+        if (editTA && editTA.selectionStart !== editTA.selectionEnd) {
+          const x0 = co.x + visCol(str, Math.min(editTA.selectionStart, editTA.selectionEnd)) * adv;
+          const x1 = co.x + visCol(str, Math.max(editTA.selectionStart, editTA.selectionEnd)) * adv;
+          const q = [[x0, co.y], [x1, co.y], [x1, co.y + eo.sizeMM], [x0, co.y + eo.sizeMM]].map(p => apply(m, p));
+          gUI.appendChild(el("polygon", { points: q.map(c => c.join(",")).join(" "), class: "cvSel" }));
+        }
+        const x = co.x + visCol(str, editCaret) * adv, bad = window.charErr && charErr(str);
+        const p0 = apply(m, [x, co.y]), p1 = apply(m, [x, co.y + eo.sizeMM]);
+        gUI.appendChild(el("line", { x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], class: "cvCaret" + (bad ? " bad" : "") }));
+        return;
+      }
       if (eo) {
         // selection highlight: one translucent quad per spanned line, in the
         // same advance-cell frame as the glyphs and the caret
@@ -287,6 +369,21 @@ window.Canvas = (function () {
         const lp = toLocal(eo, p), { hw, hh } = halfExtent(eo);
         if (lp[0] >= -hw - 1.5 && lp[0] <= hw + 1.5 && lp[1] >= -hh - 1.5 && lp[1] <= hh + 1.5) {
           ev.preventDefault();
+          if (eo.type === "table") {
+            // press on the edited table: same cell moves the caret,
+            // another cell switches the editor to it
+            const { r, c } = cellAt(eo, lp[0], lp[1]);
+            if (editCell && r === editCell.r && c === editCell.c) {
+              const co = cellOrigin(eo, r, c), adv = SH.advance * eo.sizeMM / SH.height;
+              const str = (eo.cells[r] || [])[c] || "";
+              const want = Math.max(0, Math.round((lp[0] - co.x) / adv));
+              let raw = 0, seen = 0;
+              while (raw < str.length && seen < want) { if (str[raw] !== "*" && str[raw] !== "_") seen++; raw++; }
+              editTA.setSelectionRange(raw, raw); editTA.focus({ preventScroll: true });
+              editCaret = raw; render();
+            } else openCell(eo, r, c);
+            return;
+          }
           const idx = indexAt(eo, lp[0], lp[1]);
           editDrag = { anchor: idx };
           editTA.setSelectionRange(idx, idx); editTA.focus({ preventScroll: true });
@@ -339,6 +436,10 @@ window.Canvas = (function () {
       if (ev && ev.cancelable) ev.preventDefault();
       commitSnapshot(); const o = mkText("", p); select(o.id); setTool("select"); recomputeAll(); openInline(o); return;
     }
+    if (t === "table") {
+      if (ev && ev.cancelable) ev.preventDefault();
+      commitSnapshot(); const o = mkTable(p); select(o.id); setTool("select"); render(); recomputeAll(); openCell(o, 0, 0); return;
+    }
     if (t === "poly") { addPolyVertex(p); return; }
     // rect / ellipse / line / pen: drag to size
     drag = { kind: "create", t, start: p, pts: [p] };
@@ -381,7 +482,7 @@ window.Canvas = (function () {
   // move/scale/rotate the live SVG group cheaply, defer the heavy preview
   function liveTransform(o) {
     const g = gObjs.querySelector(`[data-id="${o.id}"]`); if (g) g.setAttribute("transform", mstr(affine(o.tf)));
-    if (o.type === "text" || o.type === "ellipse" || o.type === "rect") { const gp = g && g.firstChild; if (gp) gp.setAttribute("d", pathD(localPaths(o))); }
+    if (o.type === "text" || o.type === "table" || o.type === "ellipse" || o.type === "rect") { const gp = g && g.firstChild; if (gp) gp.setAttribute("d", pathD(localPaths(o))); }
     renderUI(); previewDebounced();
   }
   // Resize by dragging a handle. The opposite handle stays fixed (the anchor);
@@ -402,7 +503,9 @@ window.Canvas = (function () {
     const dux = dv[0] * co + dv[1] * si, duy = -dv[0] * si + dv[1] * co; // project onto local axes
     let sx = H.ax ? (dux * H.cx) / (2 * hw || 1) : (drag.tf0.sx || 1);
     let sy = H.ay ? (duy * H.cy) / (2 * hh || 1) : (drag.tf0.sy || 1);
-    const isText = o.type === "text";
+    // text and tables scale through sizeMM, not the transform: stretched
+    // glyphs look wrong, so a corner drag rescales the type instead
+    const isText = o.type === "text" || o.type === "table";
     if ((uniform || isText) && H.ax && H.ay) { const f = Math.max(Math.abs(sx), Math.abs(sy)) || 0.01; sx = f * (sx < 0 ? -1 : 1); sy = f * (sy < 0 ? -1 : 1); }
     const place = (hwN, hhN) => {
       const vx = H.ax ? sx * H.cx * hwN : 0, vy = H.ay ? sy * H.cy * hhN : 0;
@@ -421,6 +524,7 @@ window.Canvas = (function () {
   function nextId() { return "o" + (++counter); }
   function addObject(o) { doc.objects.push(o); return o; }
   function mkText(str, p) { return addObject({ id: nextId(), type: "text", tf: { x: p[0], y: p[1], sx: 1, sy: 1, rot: 0 }, str, sizeMM: 6, italic: false, underline: false }); }
+  function mkTable(p) { return addObject({ id: nextId(), type: "table", tf: { x: p[0], y: p[1], sx: 1, sy: 1, rot: 0 }, cells: [["", "", ""], ["", "", ""], ["", "", ""]], sizeMM: 4 }); }
   let polyPts = null;
   function addPolyVertex(p) {
     if (!polyPts) polyPts = [];
@@ -493,11 +597,17 @@ window.Canvas = (function () {
     const gb = document.getElementById("cvGroup"), ub = document.getElementById("cvUngroup");
     if (gb) gb.hidden = !showGroup;
     if (ub) ub.hidden = !(o && o.type === "group");
-    if (!o) { document.getElementById("cvStyleText").hidden = true; document.getElementById("cvStyleShape").hidden = true; return; }
-    const isText = o.type === "text", canSimplify = o.type === "svg" || o.type === "trace" || o.type === "freehand";
-    document.getElementById("cvStyleText").hidden = !isText;
+    const tb = document.getElementById("cvStyleTable");
+    if (!o) { document.getElementById("cvStyleText").hidden = true; document.getElementById("cvStyleShape").hidden = true; if (tb) tb.hidden = true; return; }
+    const isText = o.type === "text", isTable = o.type === "table", canSimplify = o.type === "svg" || o.type === "trace" || o.type === "freehand";
+    document.getElementById("cvStyleText").hidden = !(isText || isTable);
     document.getElementById("cvStyleShape").hidden = !canSimplify;
-    if (isText) { document.getElementById("cvSize").value = o.sizeMM.toFixed(1); document.getElementById("cvItalic").classList.toggle("on", o.italic); document.getElementById("cvUnder").classList.toggle("on", o.underline); }
+    if (tb) tb.hidden = !isTable;
+    if (isText || isTable) {
+      document.getElementById("cvSize").value = o.sizeMM.toFixed(1);
+      document.getElementById("cvItalic").classList.toggle("on", !!o.italic);
+      document.getElementById("cvUnder").classList.toggle("on", !!o.underline);
+    }
     if (canSimplify) document.getElementById("cvDetail").value = o.eps ? Math.min(100, o.eps * 100) : 0;
   }
 
@@ -544,7 +654,14 @@ window.Canvas = (function () {
     // Fall back to the object the gesture's first press hit: any residual
     // layout shift between the presses must not break double-click-to-edit.
     const id = pickAt(toMM(ev)) || lastDownId; if (!id) return;
-    const o = doc.objects.find(x => x.id === id); if (!o || o.type !== "text") return;
+    const o = doc.objects.find(x => x.id === id); if (!o) return;
+    if (o.type === "table") {
+      ev.preventDefault(); marks = []; select(id);
+      const { r, c } = cellAt(o, ...toLocal(o, toMM(ev)));
+      openCell(o, r, c);
+      return;
+    }
+    if (o.type !== "text") return;
     ev.preventDefault(); marks = []; select(id); openInline(o);
   }
   // Edit a text object in place, on the plate: a textarea centred over the
@@ -557,6 +674,10 @@ window.Canvas = (function () {
   // o.str and the caret index are mirrored into the render.
   function openInline(o) {
     if (editId === o.id && editTA) { editTA.focus({ preventScroll: true }); return; }
+    // Close any open editor directly: relying on the focus shift to blur
+    // it lets its not-yet-settled guard steal focus back mid-chain.
+    if (closeEdit) closeEdit();
+    editCell = null;
     const stage = svg.parentElement; stage.style.position = "relative";
     const ta = document.createElement("textarea"); ta.className = "cvInline"; ta.value = o.str;
     ta.wrap = "off"; ta.spellcheck = false;
@@ -584,18 +705,102 @@ window.Canvas = (function () {
     };
     render();
     ta.oninput = sync; ta.onkeyup = sync; ta.onclick = sync; ta.onselect = sync;
-    ta.onblur = () => {
-      if (!settled) { takeFocus(); return; }
-      // a stale editor's late blur must not clobber a newer session's state
-      if (editTA !== ta) { if (ta.parentNode) ta.remove(); return; }
-      editId = null; editTA = null; editDrag = null; if (ta.parentNode) ta.remove();
+    // removing a focused textarea fires one more blur mid-removal, so
+    // drop detaches the handler first
+    const drop = () => { ta.onblur = null; if (ta.parentNode) ta.remove(); };
+    const close = () => {
+      if (editTA !== ta) { drop(); return; }
+      editId = null; editTA = null; editDrag = null; closeEdit = null; drop();
       if (!o.str.trim()) { doc.objects = doc.objects.filter(x => x !== o); if (sel === o.id) sel = null; }
       commitSnapshot(); render(); syncStyle(); recomputeAll();
+    };
+    closeEdit = close;
+    ta.onblur = () => {
+      // a stale editor's late blur must not clobber a newer session's
+      // state — and must never re-take focus, so staleness wins over
+      // the not-yet-settled focus-steal guard
+      if (editTA !== ta) { drop(); return; }
+      if (!settled) { takeFocus(); return; }
+      close();
     };
     ta.onkeydown = e => {
       e.stopPropagation();
       if (e.key === "Escape") { e.preventDefault(); ta.blur(); return; }
       // standard shortcuts: Ctrl/Cmd+I italic, Ctrl/Cmd+U underline
+      if ((e.ctrlKey || e.metaKey) && (e.key === "i" || e.key === "u")) { e.preventDefault(); toggleStyleRun(e.key === "i" ? "*" : "_"); }
+    };
+  }
+
+  // Edit one table cell in place: the same transparent-capture pattern as
+  // openInline, scoped to a single-line cell string. Tab and Enter walk
+  // the grid (Tab past the last cell grows a row), and the caret is drawn
+  // in the cell's frame by renderUI.
+  function openCell(o, r, c) {
+    if (editTA && editId === o.id && editCell && editCell.r === r && editCell.c === c) { editTA.focus({ preventScroll: true }); return; }
+    // Commit + close the open editor directly. blur() is not enough:
+    // an editor still inside its focus-settle window would swallow the
+    // blur and steal focus back, so rapid Tab/Enter chains dropped
+    // steps and typed into the superseded cell.
+    if (closeEdit) closeEdit();
+    const stage = svg.parentElement; stage.style.position = "relative";
+    const ta = document.createElement("textarea"); ta.className = "cvInline";
+    ta.value = (o.cells[r] || [])[c] || "";
+    ta.wrap = "off"; ta.spellcheck = false;
+    stage.appendChild(ta);
+    const placeTA = () => {
+      const px = svg.getBoundingClientRect().width / PLATE_MM;
+      const co = cellOrigin(o, r, c), w = apply(affine(o.tf), [co.x, co.y + o.sizeMM / 2]);
+      ta.style.left = w[0] * px + "px"; ta.style.top = w[1] * px + "px";
+      ta.style.transform = "translate(0,-50%)";
+      ta.style.width = Math.max(28, (measureVis(ta.value, o.sizeMM / SH.height) + 4) * px) + "px";
+      ta.style.height = Math.max(20, (o.sizeMM + 2) * px) + "px";
+    };
+    placeTA();
+    editId = o.id; editCell = { r, c }; editCaret = ta.value.length; editTA = ta;
+    const takeFocus = () => { ta.focus({ preventScroll: true }); const n = ta.value.length; ta.setSelectionRange(n, n); };
+    let settled = false;
+    requestAnimationFrame(() => requestAnimationFrame(() => { settled = true; }));
+    takeFocus(); requestAnimationFrame(takeFocus);
+    const sync = () => {
+      editCaret = ta.selectionDirection === "backward" ? ta.selectionStart : ta.selectionEnd;
+      const v = ta.value.replace(/\n/g, "");
+      if (v !== ta.value) { ta.value = v; }
+      if (((o.cells[r] || [])[c] || "") !== v) { o.cells[r][c] = v; placeTA(); recomputeAll(); }
+      render();
+    };
+    render();
+    ta.oninput = sync; ta.onkeyup = sync; ta.onclick = sync; ta.onselect = sync;
+    const drop = () => { ta.onblur = null; if (ta.parentNode) ta.remove(); };
+    const close = () => {
+      if (editTA !== ta) { drop(); return; }
+      editId = null; editTA = null; editCell = null; editDrag = null; closeEdit = null; drop();
+      commitSnapshot(); render(); syncStyle(); recomputeAll();
+    };
+    closeEdit = close;
+    ta.onblur = () => {
+      // staleness first: a superseded editor must never re-take focus
+      if (editTA !== ta) { drop(); return; }
+      if (!settled) { takeFocus(); return; }
+      close();
+    };
+    ta.onkeydown = e => {
+      e.stopPropagation();
+      if (e.key === "Escape") { e.preventDefault(); ta.blur(); return; }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const m = tableMetrics(o), d = e.shiftKey ? -1 : 1;
+        let i = r * m.cols + c + d;
+        if (i < 0) return;
+        if (i >= m.rows * m.cols) { commitSnapshot(); o.cells.push(o.cells[0].map(() => "")); }
+        openCell(o, Math.floor(i / m.cols), i % m.cols);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (r + 1 >= o.cells.length) { commitSnapshot(); o.cells.push(o.cells[0].map(() => "")); }
+        openCell(o, r + 1, c);
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && (e.key === "i" || e.key === "u")) { e.preventDefault(); toggleStyleRun(e.key === "i" ? "*" : "_"); }
     };
   }
@@ -612,7 +817,11 @@ window.Canvas = (function () {
     if (!o || !editTA) return;
     const selA = Math.min(editTA.selectionStart, editTA.selectionEnd);
     const selB = Math.max(editTA.selectionStart, editTA.selectionEnd);
-    if (selA === selB) { withObj(x => { const f = m === "*" ? "italic" : "underline"; x[f] = !x[f]; }); syncStyle(); editTA.focus({ preventScroll: true }); return; }
+    if (selA === selB) {
+      // no selection: whole-field toggle for text; cells style by range only
+      if (!editCell) { withObj(x => { const f = m === "*" ? "italic" : "underline"; x[f] = !x[f]; }); syncStyle(); }
+      editTA.focus({ preventScroll: true }); return;
+    }
     const s = editTA.value;
     // strip this marker, tracking each kept char's style parity and raw origin
     const chars = [], styled = [], rawOf = []; let on = false;
@@ -642,7 +851,8 @@ window.Canvas = (function () {
     if (newA < 0) newA = out.length;
     newB = kb >= chars.length ? out.length : (() => { let n = 0, seen = 0; for (; n < out.length && seen < kb; n++) if (out[n] !== m) seen++; return n; })();
     commitSnapshot();
-    o.str = out; editTA.value = out;
+    if (editCell) o.cells[editCell.r][editCell.c] = out; else o.str = out;
+    editTA.value = out;
     editTA.setSelectionRange(newA, newB); editCaret = newB;
     editTA.focus({ preventScroll: true });
     render(); recomputeAll();
@@ -736,7 +946,7 @@ window.Canvas = (function () {
     if (e.key === "Delete" || e.key === "Backspace") { if (current()) { e.preventDefault(); del(); } return; }
     const step = e.shiftKey ? 5 : 1;
     if (current() && e.key.startsWith("Arrow")) { e.preventDefault(); commitSnapshot(); const o = current(); if (e.key === "ArrowLeft") o.tf.x -= step; if (e.key === "ArrowRight") o.tf.x += step; if (e.key === "ArrowUp") o.tf.y -= step; if (e.key === "ArrowDown") o.tf.y += step; render(); recomputeAll(); return; }
-    const keys = { v: "select", t: "text", r: "rect", o: "ellipse", l: "line", p: "pen", g: "poly" };
+    const keys = { v: "select", t: "text", b: "table", r: "rect", o: "ellipse", l: "line", p: "pen", g: "poly" };
     if (keys[e.key.toLowerCase()]) setTool(keys[e.key.toLowerCase()]);
     if (e.key === "Enter" && polyPts) finishPoly(polyPts.length >= 3);
     if (e.key === "Escape") { polyPts = null; gUI.querySelectorAll(".cvTmp").forEach(n => n.remove()); select(null); setTool("select"); }
@@ -758,7 +968,7 @@ window.Canvas = (function () {
     // Firefox on macOS do not focus (or blur) on button mousedown, so
     // Delete/Undo/Clear could act with the editor still live. blur() is
     // synchronous, so the commit lands before fn runs.
-    const on = (id, fn) => { const e = document.getElementById(id); if (e) e.onclick = (...a) => { if (editTA) editTA.blur(); fn(...a); }; };
+    const on = (id, fn) => { const e = document.getElementById(id); if (e) e.onclick = (...a) => { if (closeEdit) closeEdit(); fn(...a); }; };
     on("cvUndo", doUndo); on("cvRedo", doRedo);
     on("cvDel", del); on("cvDup", dup); on("cvFwd", () => raise(1)); on("cvBack", () => raise(-1));
     on("cvFlipH", () => flip("h")); on("cvFlipV", () => flip("v"));
@@ -770,11 +980,20 @@ window.Canvas = (function () {
       b.addEventListener("mousedown", e => { if (editId != null) e.preventDefault(); });
       b.addEventListener("click", () => {
         if (editId != null && editTA) { toggleStyleRun(marker); return; }
-        withObj(o => o[field] = !o[field]); syncStyle();
+        // whole-field style is a text-object concept; table cells style
+        // by selection inside the cell editor
+        const o = current(); if (!o || o.type !== "text") return;
+        withObj(x => x[field] = !x[field]); syncStyle();
       });
     };
     styleBtn("cvItalic", "*", "italic");
     styleBtn("cvUnder", "_", "underline");
+    // table rows and columns; the last row/column must survive
+    const tmod = fn => withObj(o => { if (o.type === "table") fn(o); });
+    on("cvRowAdd", () => tmod(o => o.cells.push(o.cells[0].map(() => ""))));
+    on("cvRowDel", () => tmod(o => { if (o.cells.length > 1) o.cells.pop(); }));
+    on("cvColAdd", () => tmod(o => o.cells.forEach(r => r.push(""))));
+    on("cvColDel", () => tmod(o => { if (o.cells[0].length > 1) o.cells.forEach(r => r.pop()); }));
     on("cvAutoFit", autoFit); on("cvShare", shareURL); on("cvClear", clearAll);
     const sz = document.getElementById("cvSize"); if (sz) sz.oninput = () => withObj(o => o.sizeMM = Math.max(0.8, parseFloat(sz.value) || o.sizeMM));
     const det = document.getElementById("cvDetail"); if (det) det.oninput = () => setDetail(parseFloat(det.value));
