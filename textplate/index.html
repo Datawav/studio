@@ -232,10 +232,12 @@ function update() {
 	const valid = hasInk && !!size && !isCommand;
 	const cap = document.getElementById("capacity");
 	if (valid) {
-		// Text mode carries the text itself, so it always fits; show
-		// its size next to the (much larger) vectorized size.
+		// Text mode carries the text itself, so it always fits; the
+		// vector figure is an ASCII-geometry estimate (the real path
+		// wire is binary and dictionary-compressed, several times
+		// smaller) — enough to show the order-of-magnitude gap.
 		const textBytes = `${SH.version} text\n`.length + lines.join("\n").length;
-		cap.textContent = `${textBytes} B text / ${compile(lines, size).length} B vector`;
+		cap.textContent = `${textBytes} B text / ~${compile(lines, size).length} B vectorized`;
 		cap.className = "";
 	} else {
 		cap.textContent = "";
@@ -253,7 +255,7 @@ function compile(lines, size) {
 	const upmm = Math.round(SH.height / size.mm);
 	const stroke = Math.round(SH.strokeMM * upmm);
 	const margin = SH.marginMM * upmm;
-	const parts = [`${SH.version} path ${upmm} ${stroke}`];
+	const parts = [`path ${upmm} ${stroke}`]; // size estimate only, not the binary wire
 	for (let row = 0; row < lines.length; row++) {
 		const line = lines[row];
 		for (let col = 0; col < line.length; col++) {
