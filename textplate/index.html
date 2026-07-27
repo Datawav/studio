@@ -175,11 +175,21 @@ function canonical(text) {
 	return lines;
 }
 
-// engraveSize mirrors gui.validateText: the first (largest) ladder
-// size whose grid holds every line unwrapped.
+// engraveSize mirrors gui.fitText's two tiers: the first (largest)
+// ladder size whose grid holds every line unwrapped wins, so the
+// engraving matches the composition; when none does, the largest
+// size whose grid holds the text with overlong lines wrapped, the
+// same chunking the firmware engraves.
 function engraveSize(lines) {
 	const cols = Math.max(1, ...lines.map(l => l.length));
-	return SH.sizes.find(s => cols <= s.cols && lines.length <= s.rows) || null;
+	const unwrapped = SH.sizes.find(s => cols <= s.cols && lines.length <= s.rows);
+	if (unwrapped) {
+		return unwrapped;
+	}
+	return SH.sizes.find(s => {
+		const wrapped = lines.reduce((n, l) => n + Math.max(1, Math.ceil(l.length / s.cols)), 0);
+		return wrapped <= s.rows;
+	}) || null;
 }
 
 function sanitize() {
