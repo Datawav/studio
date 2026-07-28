@@ -1026,8 +1026,9 @@ window.Canvas = (function () {
     if (!window.Tracer) { setStatus("Tracer unavailable"); return; }
     const modeSel = document.getElementById("cvTraceMode");
     setStatus("Tracing…");
-    window.Tracer.trace(f, { mode: modeSel ? modeSel.value : "centerline", detail: 1 })
-      .then(segs => insertTrace(segs)).catch(e => setStatus("Trace: " + (e.message || e)));
+    window.Tracer.trace(f, { mode: modeSel ? modeSel.value : "auto", detail: 1 })
+      .then(segs => { insertTrace(segs); setStatus(segs.mode ? "traced as " + segs.mode : ""); })
+      .catch(e => setStatus("Trace: " + (e.message || e)));
   }
 
   return { init, worldSegs, worldGroups, segs: worldSegs, refresh: () => { render(); syncStyle(); recomputeAll(); }, insertSVG, insertTrace, _doc: () => doc };
