@@ -175,21 +175,31 @@ function canonical(text) {
 	return lines;
 }
 
-// engraveSize mirrors gui.fitText's two tiers: the first (largest)
-// ladder size whose grid holds every line unwrapped wins, so the
-// engraving matches the composition; when none does, the largest
-// size whose grid holds the text with overlong lines wrapped, the
-// same chunking the firmware engraves.
+// engraveSize mirrors gui.fitText's anchored fit: every line caps the
+// fit at the largest ladder size whose columns hold it unwrapped, the
+// smallest cap over the composition is the ceiling, and the chosen
+// size is the largest at or under the ceiling whose grid holds the
+// text with overlong lines wrapped, the same chunking the firmware
+// engraves. A line longer than every grid caps nothing, so a lone
+// overlong line still wraps at the largest size that holds it, while
+// a deliberately sized line pins the plate when a later line
+// overflows.
 function engraveSize(lines) {
-	const cols = Math.max(1, ...lines.map(l => l.length));
-	const unwrapped = SH.sizes.find(s => cols <= s.cols && lines.length <= s.rows);
-	if (unwrapped) {
-		return unwrapped;
+	let ceiling = 0;
+	for (const l of lines) {
+		const c = SH.sizes.findIndex(s => l.length <= s.cols);
+		if (c >= 0) {
+			ceiling = Math.max(ceiling, c);
+		}
 	}
-	return SH.sizes.find(s => {
+	for (let i = ceiling; i < SH.sizes.length; i++) {
+		const s = SH.sizes[i];
 		const wrapped = lines.reduce((n, l) => n + Math.max(1, Math.ceil(l.length / s.cols)), 0);
-		return wrapped <= s.rows;
-	}) || null;
+		if (wrapped <= s.rows) {
+			return s;
+		}
+	}
+	return null;
 }
 
 function sanitize() {

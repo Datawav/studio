@@ -544,15 +544,23 @@ function removedNote(d){return d.size?'removed: '+[...d].map(c=>JSON.stringify(c
 // wrappedRows counts the composition's rows on a size's grid with
 // overlong lines chunked at the column limit, the firmware's own wrap.
 function wrappedRows(lines,s){return lines.reduce((n,l)=>n+Math.max(1,Math.ceil(l.length/s.cols)),0);}
-// engraveSize mirrors gui.fitText's two tiers: the first (largest)
-// ladder size whose grid holds every line unwrapped wins, so the
-// engraving matches the composition; when none does, the largest size
-// whose grid holds the text with overlong lines wrapped — the same
-// chunking the firmware engraves.
-function engraveSize(lines){const cols=Math.max(1,...lines.map(l=>l.length));
-  return SH.sizes.find(s=>cols<=s.cols&&lines.length<=s.rows)
-    ||SH.sizes.find(s=>wrappedRows(lines,s)<=s.rows)
-    ||null;}
+// engraveSize mirrors gui.fitText's anchored fit: every line caps the
+// fit at the largest ladder size whose columns hold it unwrapped, the
+// smallest cap over the composition is the ceiling, and the chosen
+// size is the largest at or under the ceiling whose grid holds the
+// text with overlong lines wrapped — the same chunking the firmware
+// engraves. A line longer than every grid caps nothing, so a lone
+// overlong line still wraps at the largest size that holds it, while
+// a deliberately sized line pins the plate when a later line overflows.
+function engraveSize(lines){
+  let ceiling=0;
+  for(const l of lines){
+    const c=SH.sizes.findIndex(s=>l.length<=s.cols);
+    if(c>=0)ceiling=Math.max(ceiling,c);
+  }
+  for(let i=ceiling;i<SH.sizes.length;i++)
+    if(wrappedRows(lines,SH.sizes[i])<=SH.sizes[i].rows)return SH.sizes[i];
+  return null;}
 // text-plate geometry for the preview + curves gauges (grid-laid
 // glyphs, overlong lines wrapped exactly like the firmware).
 function textSegs(lines,size){const out=[],sc=size.mm/SH.height,mgn=MARGIN_MM;
