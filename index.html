@@ -97,7 +97,16 @@ body::before {
 
 /* main */
 main { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.05fr); gap: 16px; min-height: 0; }
-@media (max-width: 880px) { body { overflow: auto; } .app { height: auto; } main { grid-template-columns: 1fr; } }
+@media (max-width: 880px) {
+  body { overflow: auto; } .app { height: auto; } main { grid-template-columns: 1fr; }
+  /* the bar was the page's one unbreakable 660px row: phones got a
+     zoomed-out page (and skewed touch coords). Wrap it: brand +
+     Install on top, tabs on their own full-width row. */
+  .bar { flex-wrap: wrap; row-gap: 8px; }
+  .seg { order: 3; margin-left: 0; width: 100%; }
+  .seg button { flex: 1; padding: 6px 4px; }
+  .install { margin-left: auto; }
+}
 .panel { border-radius: 20px; padding: 18px; display: flex; flex-direction: column; min-height: 0; }
 .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
   font-weight: 600; margin-bottom: 12px; }
@@ -115,8 +124,10 @@ textarea.bad { border-color: var(--bad); }
 .hint { font-size: 12.5px; color: var(--muted); margin-top: 10px; min-height: 1.3em; }
 .hint.bad { color: var(--bad); }
 /* the Text tab types on the plate; #text is the invisible input engine
-   behind it (string, caret, selection, clipboard, IME, native undo) */
-#text { position: absolute; opacity: 0; width: 2px; height: 2px; min-height: 0; flex: none; padding: 0; border: 0; pointer-events: none; }
+   behind it (string, caret, selection, clipboard, IME, native undo).
+   It lives inside .plateWrap so a soft keyboard's focus-scroll lands on
+   the plate; 16px font stops iOS zooming to it on focus. */
+#text { position: absolute; opacity: 0; width: 2px; height: 2px; min-height: 0; flex: none; padding: 0; border: 0; pointer-events: none; font-size: 16px; }
 /* the size chip pulses when the ladder re-fits, so the snap reads as
    intentional rather than a glitch */
 .hint.pulse { animation: chipPulse .6s ease; transform-origin: left center; }
@@ -273,10 +284,6 @@ button.ghost.danger:hover { border-color: var(--bad); color: var(--bad); }
       <h2 id="editorTitle">Canvas</h2>
       <div data-pane="text" hidden style="flex-direction:column;flex:1">
         <p class="hint" style="margin:0">Type on the plate — the caret lives in the engraving grid. Click a cell to move it, Enter breaks a line, overlong lines wrap exactly as engraved.</p>
-        <textarea id="text" spellcheck="false" autocapitalize="off" autocomplete="off">IN CASE OF EMERGENCY
-BREAK GLASS
-
-SEEDHAMMER</textarea>
         <div class="hint" id="textHint"></div>
       </div>
       <div data-pane="canvas" style="display:flex;flex-direction:column;flex:1;gap:10px;min-height:0">
@@ -358,7 +365,10 @@ Check plates *yearly*.</textarea>
     </section>
 
     <section class="panel glass stage" data-view="editor">
-      <div class="plateWrap"><canvas id="plate" width="900" height="900"></canvas></div>
+      <div class="plateWrap"><textarea id="text" spellcheck="false" autocapitalize="off" autocomplete="off">IN CASE OF EMERGENCY
+BREAK GLASS
+
+SEEDHAMMER</textarea><canvas id="plate" width="900" height="900"></canvas></div>
       <div class="spec">
         <div class="dims">
           <div><b id="size">—</b> <span id="time"></span></div>
@@ -956,11 +966,25 @@ function pulseSizeChip(tSize){
     const col=Math.round((mmx-MARGIN_MM)/(SH.advance/SH.height*textGrid.mm));
     return cellIndex(ta.value,row,Math.max(0,col),textGrid.cols);
   };
-  let dragAnchor=null;
+  const selectWordAt=i=>{
+    const v=ta.value,word=c=>/[A-Za-z0-9]/.test(c||'');
+    let a=i,b=i;
+    while(a>0&&word(v[a-1]))a--;
+    while(b<v.length&&word(v[b]))b++;
+    if(b>a){ta.setSelectionRange(a,b);ta.focus({preventScroll:true});calcCaret();redrawPlate();}
+  };
+  let dragAnchor=null,lastTap={t:0,i:-9};
   plate.addEventListener('pointerdown',e=>{
     if(mode()!=='text')return;
     e.preventDefault();
     const idx=plateCell(e);
+    // preventDefault suppresses the synthesized dblclick for touch, so
+    // double-tap word-select is detected by hand for non-mouse pointers
+    if(e.pointerType!=='mouse'&&e.timeStamp-lastTap.t<400&&Math.abs(idx-lastTap.i)<=1){
+      lastTap={t:0,i:-9};dragAnchor=null;
+      selectWordAt(idx);return;
+    }
+    lastTap={t:e.timeStamp,i:idx};
     const anchor=e.shiftKey?(ta.selectionDirection==='backward'?ta.selectionEnd:ta.selectionStart):idx;
     dragAnchor=anchor;plate.setPointerCapture(e.pointerId);
     ta.setSelectionRange(Math.min(anchor,idx),Math.max(anchor,idx),idx<anchor?'backward':'forward');
@@ -976,11 +1000,7 @@ function pulseSizeChip(tSize){
   plate.addEventListener('pointerup',endDrag);plate.addEventListener('pointercancel',endDrag);
   plate.addEventListener('dblclick',e=>{
     if(mode()!=='text')return;
-    const v=ta.value,i=plateCell(e),word=c=>/[A-Za-z0-9]/.test(c||'');
-    let a=i,b=i;
-    while(a>0&&word(v[a-1]))a--;
-    while(b<v.length&&word(v[b]))b++;
-    if(b>a){ta.setSelectionRange(a,b);calcCaret();redrawPlate();}
+    selectWordAt(plateCell(e));
   });
   // blink; a full redraw is cheap at text-plate seg counts
   setInterval(()=>{if(mode()!=='text'||!textCaret)return;caretShow=!caretShow;redrawPlate();},530);
@@ -1001,8 +1021,11 @@ function selectTab(m){
     // the cell grid is a text-plate concept; hide the toggle elsewhere
     document.getElementById('gridChip').style.display=m==='text'?'inline-flex':'none';
     recompute();
-    // the plate is the Text tab's editing surface: caret cursor + focus
-    document.getElementById('plate').style.cursor=m==='text'?'text':'';
+    // the plate is the Text tab's editing surface: caret cursor + focus;
+    // touch-action none so a finger drag selects instead of scrolling
+    const plateEl=document.getElementById('plate');
+    plateEl.style.cursor=m==='text'?'text':'';
+    plateEl.style.touchAction=m==='text'?'none':'';
     if(m==='text')document.getElementById('text').focus({preventScroll:true});
     // the canvas surface needs a live (visible) CTM to place handles
     if(m==='canvas'&&window.Canvas)window.Canvas.refresh();
