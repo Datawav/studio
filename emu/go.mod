@@ -24,3 +24,8 @@ require (
 // the GOOS=js build against it. Studio CI can check the firmware out into
 // ./firmware directly instead.
 replace seedhammer.com => ./firmware
+
+// Replaces do not cross module boundaries, so the firmware's own
+// kortschak-qr replace must be mirrored here or this wrapper resolves
+// the original module, which lacks the fork's additions (qr.MinSize).
+replace github.com/seedhammer/kortschak-qr => github.com/Gangleri42/kortschak-qr v0.3.3
