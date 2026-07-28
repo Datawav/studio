@@ -943,6 +943,29 @@ window.Canvas = (function () {
   function b64url(bytes) { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
   function ub64url(s) { s = s.replace(/-/g, "+").replace(/_/g, "/"); const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
 
+  // ---- document files ----------------------------------------------------
+  // The share hash and localStorage already serialize the document; Save and
+  // Open are file IO around the same JSON, pretty-printed so the files diff.
+  // The curves Download stays what it is: the compiled wire payload, which
+  // cannot be loaded back — these can.
+  const DOC_TYPES = new Set(["text", "table", "rect", "ellipse", "line", "freehand", "polygon", "svg", "trace", "group"]);
+  function saveFile() {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 1)], { type: "application/json" }));
+    a.download = "plate.shcanvas"; a.click();
+  }
+  function openFile(f) {
+    f.text().then(t => {
+      let d; try { d = JSON.parse(t); } catch (e) { d = null; }
+      if (!d || d.v !== 1 || !Array.isArray(d.objects)) { setStatus("Open: not a canvas document"); return; }
+      const unknown = (function walk(list) { for (const o of list) { if (!o || !DOC_TYPES.has(o.type)) return (o && o.type) || "?"; if (o.type === "group") { const u = walk(o.children || []); if (u) return u; } } return null; })(d.objects);
+      if (unknown) { setStatus(`Open: unknown object type "${unknown}"`); return; }
+      commitSnapshot(); // Open is undoable
+      doc = { v: 1, objects: d.objects };
+      afterRestore(); setStatus("Opened ✓");
+    });
+  }
+
   // ---- preview / gauge bridge --------------------------------------------
   let previewT = null;
   function previewDebounced() { clearTimeout(previewT); previewT = setTimeout(recomputeAll, 60); }
@@ -1009,6 +1032,9 @@ window.Canvas = (function () {
     on("cvColAdd", () => tmod(o => o.cells.forEach(r => r.push(""))));
     on("cvColDel", () => tmod(o => { if (o.cells[0].length > 1) o.cells.forEach(r => r.pop()); }));
     on("cvAutoFit", autoFit); on("cvShare", shareURL); on("cvClear", clearAll);
+    on("cvSave", saveFile);
+    on("cvOpen", () => document.getElementById("cvDocFile").click());
+    const df = document.getElementById("cvDocFile"); if (df) df.onchange = e => { const f = e.target.files[0]; if (f) openFile(f); e.target.value = ""; };
     const sz = document.getElementById("cvSize"); if (sz) sz.oninput = () => withObj(o => o.sizeMM = Math.max(3, parseFloat(sz.value) || o.sizeMM));
     const det = document.getElementById("cvDetail"); if (det) det.oninput = () => setDetail(parseFloat(det.value));
     on("cvSvg", () => document.getElementById("cvSvgFile").click());
