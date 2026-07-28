@@ -526,7 +526,7 @@ window.Canvas = (function () {
     };
     if (isText) {
       const f = Math.max(Math.abs(sx), Math.abs(sy)) || 0.01;
-      o.sizeMM = Math.max(0.8, (drag.size0 || o.sizeMM) * f);
+      o.sizeMM = Math.max(3, (drag.size0 || o.sizeMM) * f); // 3.0mm: smallest readable type on steel (firmware ladder floor)
       o.tf.sx = sx < 0 ? -1 : 1; o.tf.sy = sy < 0 ? -1 : 1;
       const he = halfExtent(o); place(he.hw, he.hh);
     } else { o.tf.sx = sx || 0.01; o.tf.sy = sy || 0.01; place(hw, hh); }
@@ -1009,7 +1009,7 @@ window.Canvas = (function () {
     on("cvColAdd", () => tmod(o => o.cells.forEach(r => r.push(""))));
     on("cvColDel", () => tmod(o => { if (o.cells[0].length > 1) o.cells.forEach(r => r.pop()); }));
     on("cvAutoFit", autoFit); on("cvShare", shareURL); on("cvClear", clearAll);
-    const sz = document.getElementById("cvSize"); if (sz) sz.oninput = () => withObj(o => o.sizeMM = Math.max(0.8, parseFloat(sz.value) || o.sizeMM));
+    const sz = document.getElementById("cvSize"); if (sz) sz.oninput = () => withObj(o => o.sizeMM = Math.max(3, parseFloat(sz.value) || o.sizeMM));
     const det = document.getElementById("cvDetail"); if (det) det.oninput = () => setDetail(parseFloat(det.value));
     on("cvSvg", () => document.getElementById("cvSvgFile").click());
     on("cvImg", () => document.getElementById("cvImgFile").click());
