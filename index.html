@@ -671,6 +671,7 @@ function recompute(){
       // firmware wraps overlong lines itself, so the payload stays the
       // composition and only the verdict and preview mirror the wrap
       sendKind='text'; payload=new TextEncoder().encode(`${SH.version} text\n`+lines.join('\n'));
+      textExact=tSize&&segs.length?textPlanReport(tSize.mm+'|'+lines.join('\n'),segs):null;
       const wrap=tSize?wrappedRows(lines,tSize):0;
       let hintTxt='';
       if(has)hintTxt=tSize
@@ -741,6 +742,28 @@ function plannedToSegs(json){
     return out;
   }catch(e){return null;}
 }
+// Text plates send the cheap text envelope, so the firmware-exact cost
+// report never saw them and the time gauge fell back to the flat
+// pathLen/speed estimate — ~3x low on steel (it misses the 25ms strike
+// pacing, ramps and travel). Price the preview segs through the planner
+// for the gauge only, debounced like the rich pane so a wasm plan does
+// not run per keystroke; the payload stays the text envelope. Until the
+// plan lands the gauge shows the flat estimate with its '~'.
+let textExact=null,tgKey=null,tgReport=null,tgT=null;
+function textPlanReport(key,segs){
+  if(key===tgKey)return tgReport;
+  clearTimeout(tgT);
+  tgT=setTimeout(()=>{
+    // wasm not loaded yet: leave the key stale so a later recompute
+    // (studioCoreOnReady re-runs it) retries
+    if(!window.studioCoreEncode||!window.studioCoreReport)return;
+    let rep=null;
+    try{const p=encodePath(segs);rep=p?window.studioCoreReport(p):null;}catch(e){rep=null;}
+    tgKey=key;tgReport=rep&&rep.seconds!=null?rep:null;
+    recompute();
+  },150);
+  return null;
+}
 function gauges(m,segs,err,tCols,tRows,tSize){
   const b=bounds(segs);
   const bytes=payload?payload.length:0;
@@ -748,6 +771,7 @@ function gauges(m,segs,err,tCols,tRows,tSize){
   // caps and planned engraving time. Falls back to a JS estimate otherwise.
   let exact=null;
   if(sendKind==='path'&&payload&&window.studioCoreReport){try{exact=window.studioCoreReport(payload);}catch(e){exact=null;}}
+  else if(m==='text')exact=textExact;
   const strokes=exact&&exact.strokes!=null?exact.strokes:segs.filter(s=>s.op==='M').length;
   const mins=exact&&exact.seconds!=null?exact.seconds/60:(pathLen(segs)/ENGRAVE_MM_S)/60;
   const capErr=exact?exact.error:'';
