@@ -39,7 +39,7 @@ jobs:
       # Pinned firmware commit — not `main`, so unrelated firmware edits
       # never turn this red. Bump it together with the regenerated glyphs.js
       # (see header). Public repo: the default token checks it out.
-      FIRMWARE_REF: 1446a70ee3da653822a4fee1b0cf5ff5a22da9f7
+      FIRMWARE_REF: 49a3ab9d6566ac80ff0f64d844f746ebb6c2cb68
     steps:
       - name: Check out Studio (committed glyphs.js)
         uses: actions/checkout@v6
