@@ -106,6 +106,19 @@ window.Canvas = (function () {
   }
   // markers style runs but occupy no width; visible column of raw index i
   const visCol = (line, i) => { let n = 0; for (let k = 0; k < Math.min(i, line.length); k++) if (line[k] !== "*" && line[k] !== "_") n++; return n; };
+  // strip characters without a glyph as they are typed: nothing engraves
+  // for them (the layout leaves a blank cell) and the send gate refuses
+  // the document. The style markers * and _ are glyphs and pass.
+  const engravable = new Set(Object.keys(SH.glyphs));
+  function stripGlyphless(ta, keepNL) {
+    let clean = "";
+    for (const ch of ta.value) { if ((keepNL && ch === "\n") || engravable.has(ch)) clean += ch; }
+    if (clean !== ta.value) {
+      const at = ta.selectionStart - (ta.value.length - clean.length);
+      ta.value = clean;
+      ta.selectionStart = ta.selectionEnd = Math.max(0, at);
+    }
+  }
   // caret geometry for raw string index idx, in the object's local frame
   function caretLocal(o, idx) {
     const sc = o.sizeMM / SH.height, lines = (o.str || "").split("\n");
@@ -698,6 +711,7 @@ window.Canvas = (function () {
     requestAnimationFrame(() => requestAnimationFrame(() => { settled = true; }));
     takeFocus(); requestAnimationFrame(takeFocus);
     const sync = () => {
+      stripGlyphless(ta, true);
       // the caret sits at the moving end of a selection, not always its start
       editCaret = ta.selectionDirection === "backward" ? ta.selectionStart : ta.selectionEnd;
       if (o.str !== ta.value) { o.str = ta.value; recomputeAll(); }
@@ -762,9 +776,9 @@ window.Canvas = (function () {
     requestAnimationFrame(() => requestAnimationFrame(() => { settled = true; }));
     takeFocus(); requestAnimationFrame(takeFocus);
     const sync = () => {
+      stripGlyphless(ta, false); // no glyph, no newline in a cell
       editCaret = ta.selectionDirection === "backward" ? ta.selectionStart : ta.selectionEnd;
-      const v = ta.value.replace(/\n/g, "");
-      if (v !== ta.value) { ta.value = v; }
+      const v = ta.value;
       if (((o.cells[r] || [])[c] || "") !== v) { o.cells[r][c] = v; placeTA(); recomputeAll(); }
       render();
     };

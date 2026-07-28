@@ -524,12 +524,46 @@ function charErr(t){const bad=[...new Set([...t].filter(c=>c!=='\n'&&!allowed.ha
   if(!bad.length)return'';
   return'Unsupported char'+(bad.length>1?'s':'')+': '+bad.slice(0,8).join(' ')+(bad.length>8?' …':'')+' — plain ASCII only';}
 function canonical(t){const L=t.replace(/\r\n?/g,'\n').split('\n').map(l=>l.replace(/ +$/,''));while(L.length&&L[L.length-1]==='')L.pop();return L;}
-function engraveSize(lines){const cols=Math.max(1,...lines.map(l=>l.length));return SH.sizes.find(s=>cols<=s.cols&&lines.length<=s.rows)||null;}
-// text-plate geometry for the preview + curves gauges (grid-laid glyphs).
+// sanitizeTA strips characters without a glyph as they are typed — the
+// device rejects payloads carrying them — preserving the caret. Returns
+// the dropped characters for the pane's hint.
+function sanitizeTA(ta){
+  const v=ta.value.replace(/\r\n?/g,'\n');
+  const dropped=new Set();let clean='';
+  for(const ch of v){if(ch==='\n'||allowed.has(ch))clean+=ch;else dropped.add(ch);}
+  if(clean!==ta.value){
+    const at=ta.selectionStart-(ta.value.length-clean.length);
+    ta.value=clean;ta.selectionStart=ta.selectionEnd=Math.max(0,at);
+  }
+  return dropped;
+}
+function removedNote(d){return d.size?'removed: '+[...d].map(c=>JSON.stringify(c)).join(' '):'';}
+// wrappedRows counts the composition's rows on a size's grid with
+// overlong lines chunked at the column limit, the firmware's own wrap.
+function wrappedRows(lines,s){return lines.reduce((n,l)=>n+Math.max(1,Math.ceil(l.length/s.cols)),0);}
+// engraveSize mirrors gui.fitText's two tiers: the first (largest)
+// ladder size whose grid holds every line unwrapped wins, so the
+// engraving matches the composition; when none does, the largest size
+// whose grid holds the text with overlong lines wrapped — the same
+// chunking the firmware engraves.
+function engraveSize(lines){const cols=Math.max(1,...lines.map(l=>l.length));
+  return SH.sizes.find(s=>cols<=s.cols&&lines.length<=s.rows)
+    ||SH.sizes.find(s=>wrappedRows(lines,s)<=s.rows)
+    ||null;}
+// text-plate geometry for the preview + curves gauges (grid-laid
+// glyphs, overlong lines wrapped exactly like the firmware).
 function textSegs(lines,size){const out=[],sc=size.mm/SH.height,mgn=MARGIN_MM;
-  for(let r=0;r<lines.length;r++)for(let c=0;c<lines[r].length;c++){const g=gseg(lines[r][c]);if(!g)continue;
-    const dx=mgn+c*SH.advance*sc,dy=mgn+r*SH.height*sc;
-    for(const s of g)out.push(mapSeg(s,([x,y])=>[dx+x*sc,dy+y*sc]));}
+  let row=0;
+  for(const line of lines){
+    let rest=line;
+    do{
+      const chunk=rest.slice(0,size.cols);rest=rest.slice(size.cols);
+      for(let c=0;c<chunk.length;c++){const g=gseg(chunk[c]);if(!g)continue;
+        const dx=mgn+c*SH.advance*sc,dy=mgn+row*SH.height*sc;
+        for(const s of g)out.push(mapSeg(s,([x,y])=>[dx+x*sc,dy+y*sc]));}
+      row++;
+    }while(rest.length);
+  }
   return out;}
 
 // ==== emit + gauges ====
@@ -621,7 +655,9 @@ function recompute(){
   let segs=[],err=null,tCols=0,tRows=0,tSize=null;
   try{
     if(m==='text'){
-      const lines=canonical(document.getElementById('text').value);
+      const ta=document.getElementById('text');
+      const dropped=sanitizeTA(ta);
+      const lines=canonical(ta.value);
       const has=lines.some(l=>l.trim()!=='');
       const isCmd=lines.length&&lines[0].startsWith('command: ');
       tCols=Math.max(0,...lines.map(l=>l.length));tRows=lines.length;
@@ -631,12 +667,22 @@ function recompute(){
       else if(textCharErr)err=textCharErr;
       else if(has&&!tSize)err='does not fit any plate size';
       segs=tSize?textSegs(lines,tSize):[];
-      // text sends the cheap text envelope, not the vector path
+      // text sends the cheap text envelope, not the vector path; the
+      // firmware wraps overlong lines itself, so the payload stays the
+      // composition and only the verdict and preview mirror the wrap
       sendKind='text'; payload=new TextEncoder().encode(`${SH.version} text\n`+lines.join('\n'));
-      document.getElementById('textHint').textContent=has?
-        (tSize?`${tCols}×${tRows} · engraves at ${tSize.mm.toFixed(1)} mm`:'✕ '+err):'';
+      const wrap=tSize?wrappedRows(lines,tSize):0;
+      let hintTxt='';
+      if(has)hintTxt=tSize
+        ?`${tCols}×${tRows}`+(wrap>tRows?` · wraps to ${wrap} rows`:'')+` · engraves at ${tSize.mm.toFixed(1)} mm`
+        :'✕ '+err;
+      const note=removedNote(dropped);
+      if(note)hintTxt=hintTxt?hintTxt+' · '+note:note;
+      document.getElementById('textHint').textContent=hintTxt;
       document.getElementById('textHint').className='hint'+(err?' bad':'');
       document.getElementById('text').classList.toggle('bad',!!err);
+      // the gauges label the engraved grid, not the raw composition
+      if(tSize){tCols=Math.min(tCols,tSize.cols);tRows=wrap;}
     } else if(m==='canvas'){
       segs=window.Canvas?window.Canvas.worldSegs():[];
       // grouped emit dedups repeated shapes through the payload
@@ -670,7 +716,7 @@ function recompute(){
             if(rep&&rep.error&&!rep.plan){err=rep.error.replace(/^curves: /,'');payload=null;}
           }
         }
-        hint.textContent=err||'';
+        hint.textContent=err||removedNote(mdDropped);
       }else hint.textContent='engraving engine loading…';
       hint.className='hint'+(err?' bad':'');
     }
@@ -766,7 +812,10 @@ document.getElementById('text').addEventListener('input',recompute);
 // Rich recompute runs the full wasm render+report per change; debounce
 // typing so dense documents stay editable (the canvas debounces likewise).
 let mdT=null;const mdRecompute=()=>{clearTimeout(mdT);mdT=setTimeout(recompute,150);};
-document.getElementById('md').addEventListener('input',mdRecompute);
+// sanitize immediately on input — the recompute behind the debounce
+// only refreshes the hint — so unsupported characters never linger
+let mdDropped=new Set();
+document.getElementById('md').addEventListener('input',()=>{mdDropped=sanitizeTA(document.getElementById('md'));mdRecompute();});
 document.getElementById('bodyMM').addEventListener('input',mdRecompute);
 document.getElementById('grid').addEventListener('change',recompute);
 document.getElementById('emuFeed').onclick=()=>window.SeedHammerEmu.feed(payload);
