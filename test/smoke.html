@@ -1,0 +1,121 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Studio smoke test</title>
+<!--
+  Drives the real editor in an iframe. Same origin, so the harness
+  reaches the page's own globals: no test code ships in index.html, and
+  no browser automation library is needed. Open /test/smoke.html and
+  read the page, or run it headless, where it reports by requesting
+  /__smoke__/<summary> and the shell reads that back out of the static
+  server's access log:
+
+    python3 -m http.server 8080 > server.log 2>&1 &
+    google-chrome --headless --disable-gpu --no-sandbox \
+      http://127.0.0.1:8080/test/smoke.html &
+    until grep -q '__smoke__/' server.log; do sleep 1; done
+
+  The fixture stamps one two-outline cell twelve times through <use>,
+  with rx corners, sized so the auto-fit fills the plate. That covers
+  every way this has broken: a <use> the reader skips, a <defs>
+  template it draws anyway, rx it rounds off, a dictionary that stops
+  deduplicating, and a fit that lands on the safety margin and fails
+  validation once placements round.
+-->
+<body style="font:14px/1.5 ui-monospace,monospace;padding:1rem">
+<pre id="log">running…</pre>
+<iframe id="app" src="../index.html" style="width:1200px;height:900px;border:1px solid #ccc"></iframe>
+<script>
+const CELLS = 12, OUTLINES = CELLS * 2;
+// Each rounded outline is a move, four sides and four corner cubics.
+const SEGS_PER_OUTLINE = 9;
+
+const lines = [];
+function check(name, got, want, cmp) {
+  const ok = cmp ? cmp(got, want) : got === want;
+  lines.push(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${JSON.stringify(got)}${ok ? '' : ` (want ${JSON.stringify(want)})`}`);
+  return ok;
+}
+
+// Reporting back to the shell without a browser automation library:
+// request a URL that says how it went, and let the static server's
+// access log carry it. --dump-dom is no use here because it fires at
+// load, long before the wasm is up, and --virtual-time-budget cannot
+// wait for it either: virtual time fast-forwards Date.now and
+// setTimeout, so a readiness deadline expires in real milliseconds
+// while the wasm is still compiling.
+function done(pass) {
+  const summary = lines.join(' | ') + ' | RESULT: ' + (pass ? 'PASS' : 'FAIL');
+  document.getElementById('log').textContent =
+    lines.join('\n') + '\n\nRESULT: ' + (pass ? 'PASS' : 'FAIL');
+  // The 404 is expected and irrelevant: the request line is the signal.
+  fetch('/__smoke__/' + encodeURIComponent(summary)).catch(() => {});
+}
+
+async function run() {
+  const frame = document.getElementById('app');
+  const w = frame.contentWindow;
+  // Whatever the iframe throws is the actual explanation, so carry it
+  // out rather than reporting a bare timeout.
+  const frameErrors = [];
+  w.addEventListener('error', e => frameErrors.push(e.message));
+  const deadline = Date.now() + 50000;
+  while (!(w.studioCoreReady && w.Canvas)) {
+    if (Date.now() > deadline) {
+      const missing = [!w.studioCoreReady && 'studioCoreReady', !w.Canvas && 'Canvas']
+        .filter(Boolean).join(' and ');
+      throw new Error(`editor did not become ready: no ${missing}` +
+        (frameErrors.length ? `; iframe errors: ${frameErrors.join(' / ')}` : '') +
+        `; document.readyState=${w.document.readyState}`);
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+  const svg = await (await fetch('fixtures/stamped.svg')).text();
+
+  w.document.getElementById('cvClear').click();
+  w.Canvas.insertSVG(svg);
+  await new Promise(r => setTimeout(r, 500));
+
+  // Measured inside the editor's own realm: its helpers are top-level
+  // const, which is a lexical global and never a window property, so
+  // they are unreachable as w.name from out here.
+  const m = w.eval(`(() => {
+    const groups = Canvas.worldGroups();
+    const f = v => +v.toFixed(4);
+    const arg = JSON.stringify(groups.map(g => ({at: [f(g.at[0]), f(g.at[1])], d: mmPath(g.segs)})));
+    const dict = studioCoreEncodeGroups(arg);
+    if (dict.error) return {failed: 'encodeGroups: ' + dict.error};
+    const flatSegs = [];
+    for (const g of groups) for (const s of g.segs)
+      flatSegs.push(mapSeg(s, ([x, y]) => [g.at[0] + x, g.at[1] + y]));
+    const flat = studioCoreEncode(mmPath(flatSegs));
+    if (flat.error) return {failed: 'encode: ' + flat.error};
+    const rep = studioCoreReport(dict.payload);
+    return {
+      outlines: groups.length,
+      segs: groups.reduce((n, g) => n + g.segs.length, 0),
+      strokes: rep.strokes,
+      reportError: rep.error,
+      dictBytes: dict.payload.length,
+      flatBytes: flat.payload.length,
+    };
+  })()`);
+  if (m.failed) throw new Error(m.failed);
+
+  let pass = true;
+  // Every stamp reaches the canvas, and the <defs> template does not.
+  pass &= check('outlines', m.outlines, OUTLINES);
+  pass &= check('strokes', m.strokes, OUTLINES);
+  // Sharp corners would make this 5 segments per outline, not 9.
+  pass &= check('segments', m.segs, OUTLINES * SEGS_PER_OUTLINE);
+  // The drawing fills the plate: without the fit slack, placement
+  // rounding pushes it past the 3mm margin and validation refuses it.
+  pass &= check('validates', m.reportError, '');
+  // One outline in the dictionary against twenty-four inlined.
+  pass &= check('dictionary halves the payload',
+    [m.dictBytes, m.flatBytes], true, ([d, fl]) => d * 2 < fl);
+  done(!!pass);
+}
+
+run().catch(e => { lines.push('FAIL ' + (e && e.message || e)); done(false); });
+</script>
+</body>

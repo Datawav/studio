@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800">
+  <defs>
+    <g id="cell">
+      <rect x="-25" y="-35" width="50" height="70" rx="22"/>
+      <rect x="-8" y="-20" width="16" height="40" rx="8"/>
+    </g>
+  </defs>
+  <use href="#cell" x="60" y="60"/>
+  <use href="#cell" x="230" y="60"/>
+  <use href="#cell" x="400" y="60"/>
+  <use href="#cell" x="570" y="60"/>
+  <use href="#cell" x="60" y="230"/>
+  <use href="#cell" x="230" y="230"/>
+  <use href="#cell" x="400" y="230"/>
+  <use href="#cell" x="570" y="230"/>
+  <use href="#cell" x="60" y="400"/>
+  <use href="#cell" x="230" y="400"/>
+  <use href="#cell" x="400" y="400"/>
+  <use href="#cell" x="570" y="400"/>
+</svg>

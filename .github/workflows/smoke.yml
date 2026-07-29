@@ -1,0 +1,102 @@
+# Loads the editor in a real browser and imports a fixture, so a pull
+# request has something to be green about: the deploy workflows only
+# run on push to main, which made merges unguarded.
+#
+# studio-core.wasm is a build output, not a committed file (see
+# .gitignore), so this builds it the way pages.yml does, from the same
+# pinned firmware, read out of pages.yml so the two cannot drift.
+# emu.wasm is not built: the editor reaches ready and the canvas works
+# without it, and it is the slower half of the build.
+#
+# Otherwise no dependencies. The runner already has python3 and Chrome,
+# the harness at test/smoke.html drives the page from a same-origin
+# iframe, and the assertions live in that page. No browser automation
+# library, and no test code shipping inside index.html.
+#
+# The harness reports by requesting /__smoke__/<summary>, which the
+# static server writes to its access log. --dump-dom is no use: it
+# fires at load, long before the wasm is up, and --virtual-time-budget
+# cannot wait for it either, because virtual time fast-forwards
+# Date.now and setTimeout and a readiness deadline then expires in real
+# milliseconds while the wasm is still compiling.
+name: Smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read the firmware pin from the Pages workflow
+        id: pin
+        run: |
+          ref=$(grep -oP 'FIRMWARE_REF:\s*\K[0-9a-f]{40}' .github/workflows/pages.yml)
+          if [ -z "$ref" ]; then
+            echo "no FIRMWARE_REF found in pages.yml" >&2
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "firmware pinned at $ref"
+
+      - name: Check out firmware at that commit
+        uses: actions/checkout@v6
+        with:
+          repository: Gangleri42/seedhammer
+          ref: ${{ steps.pin.outputs.ref }}
+          path: _firmware
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: _firmware/go.mod
+
+      - name: Build the curves cost model (studio-core.wasm)
+        run: FIRMWARE_DIR="$GITHUB_WORKSPACE/_firmware" ./core/build.sh
+
+      - name: Serve the site
+        run: |
+          python3 -m http.server 8099 --bind 127.0.0.1 > server.log 2>&1 &
+          for _ in $(seq 1 50); do
+            curl -sf -o /dev/null http://127.0.0.1:8099/ && exit 0
+            sleep 0.2
+          done
+          echo "the static server never came up" >&2
+          exit 1
+
+      - name: Import a stamped SVG
+        run: |
+          chrome=$(command -v google-chrome || command -v chromium-browser || command -v chromium)
+          if [ -z "$chrome" ]; then echo "no chrome on the runner" >&2; exit 1; fi
+          echo "using $chrome"
+          "$chrome" --headless --disable-gpu --no-sandbox --disable-dev-shm-usage \
+            --no-first-run --no-default-browser-check \
+            --user-data-dir="$(mktemp -d)" \
+            http://127.0.0.1:8099/test/smoke.html > chrome.log 2>&1 &
+          chrome_pid=$!
+
+          for _ in $(seq 1 180); do
+            grep -q '__smoke__/' server.log && break
+            sleep 1
+          done
+          kill "$chrome_pid" 2>/dev/null || true
+
+          if ! grep -q '__smoke__/' server.log; then
+            echo "the harness never reported. server log:" >&2
+            cat server.log >&2
+            echo "chrome log:" >&2
+            tail -40 chrome.log >&2
+            exit 1
+          fi
+
+          grep -o '__smoke__/[^ ]*' server.log | tail -1 \
+            | sed 's|__smoke__/||' \
+            | python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()).replace(" | ", "\n"))' \
+            | tee result.txt
+
+          grep -q '^RESULT: PASS$' result.txt
