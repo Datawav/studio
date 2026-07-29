@@ -435,7 +435,17 @@ to learn!</textarea><canvas id="plate" width="900" height="900"></canvas></div>
 "use strict";
 // ---- caps from generated glyphs.js (single-sourced from the curves package) ----
 const PLATE_MM = SH.plateMM, MARGIN_MM = SH.marginMM;
-const FIT_MM = PLATE_MM - 2 * MARGIN_MM;
+// The payload quantum: coordinates ship as 0.1mm units, matching
+// encodeUPMM in core/main.go and payloadUnitsPerMM in cmd/svgplate.
+const UNIT_MM = 0.1;
+// An inserted drawing fits the margin box less a unit on each side. A
+// placed shape rounds twice on its way to the wire, its outline in its
+// own frame and its placement, so a point can land a whole unit
+// outside where the float fit put it. Without the slack a drawing that
+// fills the plate lands exactly on the safety margin and that rounding
+// tips it over, failing a drawing that fits. Mirrors fitSlackMM in
+// cmd/svgplate/fit.go.
+const FIT_MM = PLATE_MM - 2 * MARGIN_MM - 2 * UNIT_MM;
 const CAP = { bytes: SH.payloadCap, minutes: SH.maxMinutes };
 const ITALIC = 0.21, LSP = 1.18, CPAD = 1.2, RPAD = 0.6;
 // SH2 engrave speed model, enough for a time estimate (mm/s under the caps).
@@ -505,10 +515,43 @@ function bounds(segs){let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity;
   return{minX:a,minY:b,maxX:c,maxY:d,w:c-a,h:d-b,empty:!isFinite(a)};}
 
 // ==== SVG extraction via the browser's getCTM ====
+// Templates draw only where a <use> references them. querySelectorAll
+// walks into them all the same, and an element inside a display:none
+// parent still computes its own display, so without this the template
+// itself engraves, once, at its definition coordinates.
+const SVG_TEMPLATES='defs,symbol,clipPath,mask,marker,pattern';
+const MAX_USE_DEPTH=16;
+// expandUses replaces every <use> with a clone of what it references,
+// wrapped in a <g> carrying the use's transform and x/y offset. Doing
+// it in the DOM keeps getCTM as the one place transforms are resolved.
+// A <symbol> target contributes its children: the element itself never
+// renders, even inline.
+function expandUses(svg){
+  for(let depth=0;depth<MAX_USE_DEPTH;depth++){
+    const uses=svg.querySelectorAll('use');
+    if(!uses.length)return;
+    for(const u of uses){
+      const ref=(u.getAttribute('href')||u.getAttribute('xlink:href')||'').trim();
+      if(!ref.startsWith('#'))throw`<use> href ${ref||'(missing)'} is not a reference to an id in this document`;
+      const target=svg.querySelector(`[id="${CSS.escape(ref.slice(1))}"]`);
+      if(!target)throw`<use> references unknown id ${ref}`;
+      const g=document.createElementNS('http://www.w3.org/2000/svg','g');
+      const t=u.getAttribute('transform'), x=u.getAttribute('x')||0, y=u.getAttribute('y')||0;
+      g.setAttribute('transform',`${t?t+' ':''}translate(${+x},${+y})`);
+      const tag=target.tagName.toLowerCase();
+      if(tag==='symbol'||tag==='svg'){for(const c of target.children)g.appendChild(c.cloneNode(true));}
+      else g.appendChild(target.cloneNode(true));
+      u.replaceWith(g);
+    }
+  }
+  throw`<use> nested past ${MAX_USE_DEPTH} levels, or referencing itself`;
+}
 function extractSVG(text){
   const box=document.getElementById('sandbox'); box.innerHTML=text;
   const svg=box.querySelector('svg'); if(!svg)throw'no <svg> element';
   const out=[];
+  expandUses(svg);
+  for(const t of svg.querySelectorAll(SVG_TEMPLATES))t.remove();
   for(const el of svg.querySelectorAll('path,rect,circle,ellipse,line,polyline,polygon')){
     const st=getComputedStyle(el); if(st.display==='none'||st.visibility==='hidden')continue;
     const m=el.getCTM?el.getCTM():null; if(!m)continue;
@@ -521,7 +564,9 @@ function extractSVG(text){
 function shape(el){const a=n=>parseFloat(el.getAttribute(n)||'0');
   switch(el.tagName.toLowerCase()){
     case 'path':return parsePath(el.getAttribute('d')||'');
-    case 'rect':{const x=a('x'),y=a('y'),w=a('width'),h=a('height');return w>0&&h>0?poly([[x,y],[x+w,y],[x+w,y+h],[x,y+h]],1):[];}
+    case 'rect':{const x=a('x'),y=a('y'),w=a('width'),h=a('height');if(!(w>0&&h>0))return[];
+      const[rx,ry]=radii(el.getAttribute('rx'),el.getAttribute('ry'),w,h);
+      return rx>0&&ry>0?rrect(x,y,w,h,rx,ry):poly([[x,y],[x+w,y],[x+w,y+h],[x,y+h]],1);}
     case 'line':return[{op:'M',p:[[a('x1'),a('y1')]]},{op:'L',p:[[a('x2'),a('y2')]]}];
     case 'polyline':return pts(el.getAttribute('points'),0);
     case 'polygon':return pts(el.getAttribute('points'),1);
@@ -529,6 +574,20 @@ function shape(el){const a=n=>parseFloat(el.getAttribute(n)||'0');
     case 'ellipse':return ell(a('cx'),a('cy'),a('rx'),a('ry'));
   } return [];}
 function poly(ps,cl){const s=[{op:'M',p:[ps[0]]}];for(const p of ps.slice(1))s.push({op:'L',p:[p]});if(cl)s.push({op:'L',p:[ps[0]]});return s;}
+// A rect's corner radii: either attribute alone sets both axes, each
+// clamps to half its side. Absent, 'auto' and negative all mean none.
+function radii(rxs,rys,w,h){const r=s=>{s=(s||'').trim();if(!s||s==='auto')return null;const v=parseFloat(s);return v>0?v:null;};
+  let rx=r(rxs),ry=r(rys); if(rx===null&&ry===null)return[0,0];
+  if(rx===null)rx=ry; if(ry===null)ry=rx;
+  return[Math.min(rx,w/2),Math.min(ry,h/2)];}
+// Rounded rect: four sides and four cubic quarter-arcs, in poly's
+// direction so a rect winds the same way with or without radii.
+function rrect(x,y,w,h,rx,ry){const k=.5522847498307936,ox=rx*k,oy=ry*k,x1=x+w,y1=y+h;
+  return[{op:'M',p:[[x+rx,y]]},{op:'L',p:[[x1-rx,y]]},
+    {op:'C',p:[[x1-rx+ox,y],[x1,y+ry-oy],[x1,y+ry]]},{op:'L',p:[[x1,y1-ry]]},
+    {op:'C',p:[[x1,y1-ry+oy],[x1-rx+ox,y1],[x1-rx,y1]]},{op:'L',p:[[x+rx,y1]]},
+    {op:'C',p:[[x+rx-ox,y1],[x,y1-ry+oy],[x,y1-ry]]},{op:'L',p:[[x,y+ry]]},
+    {op:'C',p:[[x,y+ry-oy],[x+rx-ox,y],[x+rx,y]]}];}
 function pts(str,cl){const v=(str||'').split(/[\s,]+/).map(Number).filter(x=>!isNaN(x));const P=[];for(let i=0;i+1<v.length;i+=2)P.push([v[i],v[i+1]]);return P.length?poly(P,cl):[];}
 function ell(cx,cy,rx,ry){if(rx<=0||ry<=0)return[];const k=.5522847498307936,ox=rx*k,oy=ry*k;
   return[{op:'M',p:[[cx+rx,cy]]},{op:'C',p:[[cx+rx,cy+oy],[cx+ox,cy+ry],[cx,cy+ry]]},

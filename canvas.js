@@ -268,10 +268,32 @@ window.Canvas = (function () {
         return;
       }
       const segs = localPaths(o);
-      if (segs.length) out.push({ at: o0, segs: segs.map(s => mapSeg(s, lin)) });
+      if (segs.length) splitStrokes(o0, segs.map(s => mapSeg(s, lin)), out);
     };
     for (const o of doc.objects) walk(o, p => p);
     return out;
+  }
+
+  // splitStrokes cuts one object's outline into a placement per stroke,
+  // each local to its own start. An imported drawing arrives as a single
+  // object, so without this its repeated shapes — a glyph stamped across
+  // a logo, a shape copied over a plate — are one placement the
+  // dictionary cannot mine, and travel ordering cannot reorder either.
+  // Normalizing to the start is what makes copies byte-identical: they
+  // differ only in where they sit, which is exactly what at carries.
+  // Text keeps its own per-glyph placements, which are already compact.
+  function splitStrokes(at, segs, out) {
+    let cur = null, org = null;
+    for (const s of segs) {
+      if (s.op === "M") {
+        org = s.p[0];
+        cur = [{ op: "M", p: [[0, 0]] }];
+        out.push({ at: [at[0] + org[0], at[1] + org[1]], segs: cur });
+        continue;
+      }
+      if (!cur) continue;      // geometry before its first move: nothing placed yet
+      cur.push({ op: s.op, p: s.p.map(([x, y]) => [x - org[0], y - org[1]]) });
+    }
   }
 
   // ---- SVG surface -------------------------------------------------------
