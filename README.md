@@ -12,8 +12,10 @@ Two static web apps for composing plates and sending them to a SeedHammer II.
 ## Architecture
 
 This repo is a **static consumer**. It ships HTML, JS, icons, and one
-generated data file (`glyphs.js`); the deploy copies files and runs no build
-toolchain. The firmware repo ([`Gangleri42/seedhammer`](https://github.com/Gangleri42/seedhammer))
+generated data file (`glyphs.js`); the deploy copies those as-is and builds
+exactly two artifacts, `emu.wasm` and `studio-core.wasm`, from the firmware
+checkout pinned in `pages.yml`. The firmware repo
+([`Gangleri42/seedhammer`](https://github.com/Gangleri42/seedhammer))
 is the source of truth for anything derived from the firmware.
 
 ## glyphs.js
@@ -44,7 +46,27 @@ The editor writes over NFC two ways:
 - **Desktop:** a local bridge (`cmd/nfc-bridge` in the firmware repo) exposes
   a USB NFC reader at `http://127.0.0.1:8787`. The editor talks to it there.
   The bridge allow-lists this site's origin (`https://gangleri42.github.io`)
-  for the cross-origin call; run it locally to enable desktop sending.
+  for the cross-origin call; `install.sh send` in the firmware repo installs
+  it as a user service.
+
+## Run it locally
+
+```sh
+./install.sh    # builds emu.wasm + studio-core.wasm from a firmware checkout
+./serve.sh      # serves the deploy file set at http://localhost:8788
+```
+
+The installer finds the firmware checkout (`--firmware DIR`,
+`$SEEDHAMMER_DIR`, `../seedhammer`, or `~/seedhammer`; it offers to clone
+when none exists), builds the wasm from that checkout's HEAD, and stamps
+the ref into `.wasm-provenance`. `serve.sh` assembles the same file set
+the deploy publishes into `dist/` on every start and binds loopback only,
+so local-only files never reach the network.
+
+`localhost` is a secure context: the service worker, the Copy buttons, and
+desktop Send behave exactly as on the hosted site. Desktop Send needs the
+bridge to allow `http://localhost:8788`; the unit the firmware repo's
+installer writes already does.
 
 ## Deploy
 

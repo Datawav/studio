@@ -4,6 +4,9 @@ glyphs.gen.js
 # Pages build output.
 dist/
 
+# Local wasm build stamp, written by install.sh.
+/.wasm-provenance
+
 # Emulator + core build outputs: produced by emu/build.sh and core/build.sh
 # and copied to the site root by the Pages deploy (fetched relative to the
 # page). Never committed — see emu/.gitignore and core/.gitignore.

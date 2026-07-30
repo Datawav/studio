@@ -18,7 +18,9 @@ workflow builds them from the firmware checkout pinned by `FIRMWARE_REF` and
 stages `emu/emu.wasm` into the deployed site root; for a local run you must
 copy it to the repo root yourself (the page fetches `./emu.wasm`), or the tab
 keeps serving a stale build. `wasm_exec.js` must come from the same Go that
-built `emu.wasm`.
+built `emu.wasm`. `../install.sh` runs this build plus `core/`, keeps the
+root copy in lockstep, and stamps the firmware ref into
+`../.wasm-provenance`.
 
 ## Host bridge
 
