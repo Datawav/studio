@@ -1,0 +1,124 @@
+# The local-run scripts are executable documentation: serve runs
+# install.sh against the pinned firmware and probes what serve.sh
+# actually serves (the deploy file set, loopback only, local-only
+# files absent), and contracts diffs serve.sh's dist assembly against
+# pages.yml's, so the two cannot drift apart silently. The firmware
+# pin is read out of pages.yml, same as smoke.yml.
+name: Install
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read the firmware pin from the Pages workflow
+        id: pin
+        run: |
+          ref=$(grep -oP 'FIRMWARE_REF:\s*\K[0-9a-f]{40}' .github/workflows/pages.yml)
+          if [ -z "$ref" ]; then
+            echo "no FIRMWARE_REF found in pages.yml" >&2
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Check out firmware at that commit
+        uses: actions/checkout@v6
+        with:
+          repository: Gangleri42/seedhammer
+          ref: ${{ steps.pin.outputs.ref }}
+          path: _firmware
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: _firmware/go.mod
+
+      - name: install.sh builds the wasm
+        run: ./install.sh --firmware _firmware
+
+      - name: Verify
+        run: ./install.sh --verify
+
+      - name: serve.sh serves the deploy file set, loopback only
+        # The sentinel proves dist-only serving on the runner, where
+        # the local-only coldcard files do not exist to begin with.
+        run: |
+          set -euo pipefail
+          touch local-only-sentinel.js
+          ./serve.sh > serve.log 2>&1 &
+          srv=$!
+          for _ in $(seq 1 50); do
+            curl -sf -o /dev/null http://127.0.0.1:8788/index.html && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:8788/index.html | grep -q SeedHammer
+          curl -fsSo /tmp/emu.wasm http://127.0.0.1:8788/emu.wasm
+          cmp /tmp/emu.wasm emu/emu.wasm
+          curl -fsSo /tmp/core.wasm http://127.0.0.1:8788/studio-core.wasm
+          cmp /tmp/core.wasm studio-core.wasm
+          curl -fsS -o /dev/null http://127.0.0.1:8788/textplate/index.html
+          curl -fsS -o /dev/null http://127.0.0.1:8788/.wasm-provenance
+          for f in coldcard.js local-only-sentinel.js; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8788/$f")
+            if [ "$code" != 404 ]; then
+              echo "repo-root /$f served with HTTP $code; dist-only serving is broken" >&2
+              exit 1
+            fi
+          done
+          kill "$srv"
+          rm local-only-sentinel.js
+
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: serve.sh assembles the same dist as pages.yml
+        # Known, deliberate divergences: serve.sh adds the local
+        # .wasm-provenance stamp, and pages.yml stages the root
+        # wasm_exec.js only as a fallback when the emu build failed.
+        run: |
+          python3 - <<'EOF'
+          import re
+          import sys
+
+          def cps(path):
+              txt = open(path).read().replace('\\\n', ' ')
+              out = set()
+              for line in txt.splitlines():
+                  m = re.search(r'\bcp\s+(.+?)\s+dist/', line)
+                  if not m:
+                      continue
+                  for tok in m.group(1).split():
+                      if not tok.startswith('-'):
+                          out.add(tok)
+              return out
+
+          pages = cps('.github/workflows/pages.yml')
+          serve = cps('serve.sh')
+          if not pages or not serve:
+              sys.exit(f"no 'cp ... dist/' lines parsed (pages {len(pages)}, serve {len(serve)}); "
+                       "an empty parse must not read as agreement")
+          serve_only = {'.wasm-provenance'}
+          pages_only = {'wasm_exec.js'}
+          missing = pages - serve - pages_only
+          extra = serve - pages - serve_only
+          if missing or extra:
+              if missing:
+                  print(f"serve.sh misses files pages.yml deploys: {sorted(missing)}")
+              if extra:
+                  print(f"serve.sh copies files pages.yml does not: {sorted(extra)}")
+              sys.exit(1)
+          print(f"dist sets agree ({len(pages)} files)")
+          EOF
