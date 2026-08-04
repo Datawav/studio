@@ -9,6 +9,23 @@ Two static web apps for composing plates and sending them to a SeedHammer II.
 - **Text composer** — <https://gangleri42.github.io/studio/textplate/>
   A minimal plain-text plate composer.
 
+## What you need
+
+- **To compose, preview and run the emulator:** a browser. Nothing else. The
+  device emulator is the real firmware compiled to WebAssembly, and the number
+  keys 1-7 tap demo wallets into it, so the whole flow can be explored with no
+  hardware at all.
+- **To send a plate to a real machine:** an NFC path, because the SeedHammer II
+  has no camera and no data port — NFC is its only input. Either
+  **Android Chrome**, which speaks Web NFC directly, or, on desktop, a
+  **USB NFC reader** plus the local bridge (`cmd/nfc-bridge` in the firmware
+  repo).
+- **The reader:** an **ACS ACR122U**. It is what the tooling is written and
+  tested against: the udev rule the firmware repo's `install.sh` writes matches
+  its USB id (072f:2200), and the bench scripts assume it. nfcpy drives other
+  readers, and they generally work, but you are on your own for the permissions
+  rule and nobody has run the bench on them.
+
 ## Architecture
 
 This repo is a **static consumer**. It ships HTML, JS, icons, and one
@@ -31,12 +48,13 @@ committed copy going stale against the firmware. To update the font:
 
 1. In the firmware repo: `go run ./cmd/textplate glyphs.js`.
 2. Copy the result over both `glyphs.js` and `textplate/glyphs.js` here.
-3. Set `FIRMWARE_REF` in `glyphs-drift.yml` to the firmware commit you
-   generated from.
+3. Set `FIRMWARE_REF` in `glyphs-drift.yml` to the firmware version you
+   generated from, and keep `pages.yml` equal to it.
 4. Commit the three changes together.
 
-The pin is a commit SHA, not `main`, so unrelated firmware edits never turn
-the check red.
+The pin is a version index like `0.1`, tagged on the firmware repo — one
+number per firmware/Studio sync point — not `main`, so unrelated firmware
+edits never turn the check red.
 
 ## Sending to the device
 
@@ -44,7 +62,8 @@ The editor writes over NFC two ways:
 
 - **Android Chrome:** direct Web NFC, no helper needed.
 - **Desktop:** a local bridge (`cmd/nfc-bridge` in the firmware repo) exposes
-  a USB NFC reader at `http://127.0.0.1:8787`. The editor talks to it there.
+  a USB NFC reader (an **ACR122U**; see [What you need](#what-you-need)) at
+  `http://127.0.0.1:8787`. The editor talks to it there.
   The bridge allow-lists this site's origin (`https://gangleri42.github.io`)
   for the cross-origin call; `install.sh send` in the firmware repo installs
   it as a user service.
