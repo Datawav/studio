@@ -17,15 +17,17 @@ import (
 	"seedhammer.com/engrave"
 )
 
-func vectorizePlate(spline bspline.Curve, params engrave.Params) []byte {
+func vectorizePlate(spline bspline.Curve, params engrave.Params, wMM, hMM int) []byte {
 	stroke := params.StrokeWidth
-	side := params.F(85) // 85 mm plate side, in machine units (the spline's space)
+	// Plate dimensions in machine units (the spline's space).
+	side := params.F(float32(wMM))
+	height := params.F(float32(hMM))
 	corner := params.F(3)
 	inset := params.F(3) // the 3 mm safety keepout
 
 	var b bytes.Buffer
 	out := bufio.NewWriter(&b)
-	fmt.Fprintf(out, `<svg xmlns="http://www.w3.org/2000/svg" width="85mm" height="85mm" viewBox="0 0 %d %d" preserveAspectRatio="xMidYMid meet">`+"\n", side, side)
+	fmt.Fprintf(out, `<svg xmlns="http://www.w3.org/2000/svg" width="%dmm" height="%dmm" viewBox="0 0 %d %d" preserveAspectRatio="xMidYMid meet">`+"\n", wMM, hMM, side, height)
 	// CSS-var driven so the host page can theme it; the fallbacks render a
 	// light steel plate with dark engraving on their own.
 	fmt.Fprintf(out, `<defs><style>
@@ -33,8 +35,8 @@ func vectorizePlate(spline bspline.Curve, params engrave.Params) []byte {
 .safe   { fill: none; stroke: var(--safe-stroke,#cfcfd6); stroke-width: %d; stroke-dasharray: %d %d; }
 .spline { fill: none; stroke: var(--spline-stroke,#16181d); stroke-width: %d; stroke-linejoin: round; stroke-linecap: round; }
 </style></defs>`+"\n", stroke, stroke, stroke*4, stroke*4, stroke)
-	fmt.Fprintf(out, `<rect class="plate" x="0" y="0" width="%d" height="%d" rx="%d" ry="%d"/>`+"\n", side, side, corner, corner)
-	fmt.Fprintf(out, `<rect class="safe" x="%d" y="%d" width="%d" height="%d"/>`+"\n", inset, inset, side-2*inset, side-2*inset)
+	fmt.Fprintf(out, `<rect class="plate" x="0" y="0" width="%d" height="%d" rx="%d" ry="%d"/>`+"\n", side, height, corner, corner)
+	fmt.Fprintf(out, `<rect class="safe" x="%d" y="%d" width="%d" height="%d"/>`+"\n", inset, inset, side-2*inset, height-2*inset)
 
 	fmt.Fprint(out, `<path class="spline" d="`)
 	var seg bspline.Segment

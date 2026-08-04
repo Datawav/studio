@@ -11,9 +11,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"syscall/js"
 
+	"seedhammer.com/backup"
 	"seedhammer.com/bezier"
 	"seedhammer.com/bspline"
 	"seedhammer.com/curves"
@@ -29,7 +31,11 @@ var sh2 = engrave.SH2Params
 // report parses a curves path payload and returns its cost against the caps.
 // The result object mirrors curves.Report plus the caps and the first cap the
 // payload violates ("" if it fits), so the editor can render every gauge next
-// to its limit with the firmware's own numbers.
+// to its limit with the firmware's own numbers. An optional second argument
+// names the target plate ("square" or "small"): the wire format carries no
+// plate, so a small-plate payload is one whose coordinates stay inside the
+// small frame, the same convention the firmware asks by. fitsSmall reports
+// that bound regardless of the target.
 func report(this js.Value, args []js.Value) any {
 	res := map[string]any{
 		"maxSeconds": curves.MaxMinutes * 60,
@@ -49,6 +55,18 @@ func report(this js.Value, args []js.Value) any {
 	res["strokeKnots"] = r.MaxStrokeKnots
 	res["seconds"] = r.Seconds
 	res["bytes"] = r.Bytes
+	sd := backup.SmallPlate.Dims()
+	m := curves.SafetyMarginMM * sh2.Millimeter
+	small := bspline.Bounds{
+		Min: bezier.Pt(m, m),
+		Max: bezier.Pt(sd.X*sh2.Millimeter-m, sd.Y*sh2.Millimeter-m),
+	}
+	fitsSmall := !r.Bounds.Empty() && r.Bounds.In(small)
+	res["fitsSmall"] = fitsSmall
+	if verr == nil && len(args) >= 2 && args[1].String() == "small" && !fitsSmall {
+		verr = fmt.Errorf("curves: the drawing runs outside the %dx%dmm plate's %dmm margin",
+			sd.X, sd.Y, curves.SafetyMarginMM)
+	}
 	if verr != nil {
 		res["error"] = verr.Error()
 	} else {

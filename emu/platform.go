@@ -185,7 +185,8 @@ func (p *Platform) RecordPlate(plate gui.Plate) {
 	if sink.IsUndefined() {
 		return
 	}
-	if svg := vectorizePlate(plate.Spline, engraverParams); len(svg) > 0 {
+	d := plate.Size.Dims()
+	if svg := vectorizePlate(plate.Spline, engraverParams, d.X, d.Y); len(svg) > 0 {
 		sink.Invoke(string(svg))
 	}
 }
