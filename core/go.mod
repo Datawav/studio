@@ -5,6 +5,7 @@ go 1.25.10
 require seedhammer.com v0.0.0
 
 require (
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/seedhammer/kortschak-qr v0.3.2 // indirect
 	gonum.org/v1/gonum v0.17.0 // indirect
 )

@@ -329,6 +329,7 @@ button.ghost.danger:hover { border-color: var(--bad); color: var(--bad); }
         </div>
         <div class="cvStageBox"><div class="cvStage"><svg id="cv" viewBox="0 0 85 85" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="3" width="79" height="79" class="cvMargin"/><g id="cvObjs"></g><g id="cvUI"></g></svg></div></div>
         <div class="row" style="margin-top:0">
+          <button id="cvPlate" class="ghost plateToggle" title="Switch the target plate"></button>
           <button id="cvAutoFit" class="ghost">Auto-fit to budget</button>
           <button id="cvSave" class="ghost">Save</button>
           <button id="cvOpen" class="ghost">Open</button>
@@ -379,6 +380,7 @@ to learn!</textarea><canvas id="plate" width="900" height="900"></canvas></div>
         <div class="dims">
           <div><b id="size">—</b> <span id="time"></span></div>
           <label class="chip" id="gridChip" style="display:none"><input type="checkbox" id="grid" checked> Grid</label>
+          <button id="txPlate" class="ghost plateToggle" title="Switch the target plate"></button>
         </div>
         <div class="meter"><span class="lbl">payload</span><div class="track"><div class="fill" id="mBytes"></div></div><span class="val" id="vBytes"></span></div>
         <div class="meter"><span class="lbl">strokes</span><div class="track"><div class="fill" id="mStrokes"></div></div><span class="val" id="vStrokes"></span></div>
@@ -451,6 +453,46 @@ const UNIT_MM = 0.1;
 // tips it over, failing a drawing that fits. Mirrors fitSlackMM in
 // cmd/svgplate/fit.go.
 const FIT_MM = PLATE_MM - 2 * MARGIN_MM - 2 * UNIT_MM;
+// ---- plate formats: every plate shares its width, only the height
+// differs. The toggle swaps the active format (square by default) and
+// re-renders both editors; the generated glyphs.js carries each
+// format's own line grid.
+const PLATES = SH.plates || [{ name: "square", wMM: PLATE_MM, hMM: PLATE_MM, sizes: SH.sizes }];
+let PLATE = PLATES.find(p => p.name === localStorage.getItem("plate")) || PLATES[0];
+let PLATE_H_MM = PLATE.hMM;
+let FIT_H_MM = PLATE.hMM - 2 * MARGIN_MM - 2 * UNIT_MM;
+function setPlate(name) {
+  PLATE = PLATES.find(p => p.name === name) || PLATES[0];
+  localStorage.setItem("plate", PLATE.name);
+  applyPlate(true);
+}
+function applyPlate(rerender) {
+  PLATE_H_MM = PLATE.hMM;
+  FIT_H_MM = PLATE.hMM - 2 * MARGIN_MM - 2 * UNIT_MM;
+  const cvEl = document.getElementById("cv");
+  if (cvEl) {
+    cvEl.setAttribute("viewBox", `0 0 ${PLATE_MM} ${PLATE_H_MM}`);
+    cvEl.querySelector(".cvMargin").setAttribute("height", PLATE_H_MM - 2 * MARGIN_MM);
+    const stage = cvEl.closest(".cvStage");
+    stage.style.width = `min(100cqw, ${(100 * PLATE_MM / PLATE_H_MM).toFixed(3)}cqh)`;
+    stage.style.height = "auto";
+    stage.style.aspectRatio = `${PLATE_MM} / ${PLATE_H_MM}`;
+  }
+  const plateCv = document.getElementById("plate");
+  if (plateCv) {
+    plateCv.height = Math.round(plateCv.width * PLATE_H_MM / PLATE_MM);
+    const wrap = plateCv.closest(".plateWrap");
+    if (wrap) wrap.style.aspectRatio = `${PLATE_MM} / ${PLATE_H_MM}`;
+  }
+  for (const b of document.querySelectorAll(".plateToggle")) b.textContent = `Plate: ${PLATE_MM}\u00d7${PLATE_H_MM}`;
+  if (!rerender) return; // initial call: the editors render from this state on their own init
+  if (window.Canvas && Canvas.refresh) Canvas.refresh();
+  recompute();
+}
+for (const b of document.querySelectorAll(".plateToggle")) b.addEventListener("click", () => {
+  setPlate(PLATES[(PLATES.indexOf(PLATE) + 1) % PLATES.length].name);
+});
+document.addEventListener("DOMContentLoaded", () => applyPlate(false));
 const CAP = { bytes: SH.payloadCap, minutes: SH.maxMinutes };
 const ITALIC = 0.21, LSP = 1.18, CPAD = 1.2, RPAD = 0.6;
 // SH2 engrave speed model, enough for a time estimate (mm/s under the caps).
@@ -643,11 +685,11 @@ function wrappedRows(lines,s){return lines.reduce((n,l)=>n+Math.max(1,Math.ceil(
 function engraveSize(lines){
   let ceiling=0;
   for(const l of lines){
-    const c=SH.sizes.findIndex(s=>l.length<=s.cols);
+    const c=PLATE.sizes.findIndex(s=>l.length<=s.cols);
     if(c>=0)ceiling=Math.max(ceiling,c);
   }
-  for(let i=ceiling;i<SH.sizes.length;i++)
-    if(wrappedRows(lines,SH.sizes[i])<=SH.sizes[i].rows)return SH.sizes[i];
+  for(let i=ceiling;i<PLATE.sizes.length;i++)
+    if(wrappedRows(lines,PLATE.sizes[i])<=PLATE.sizes[i].rows)return PLATE.sizes[i];
   return null;}
 // text-plate geometry for the preview + curves gauges (grid-laid
 // glyphs, overlong lines wrapped exactly like the firmware).
@@ -706,11 +748,11 @@ function pathLen(segs){let L=0,pen=null;for(const g of segs){const p=g.p;
 const cv=document.getElementById('plate'),ctx=cv.getContext('2d');
 function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
 function draw(segs, grid, ghost){
-  const N=cv.width,s=N/PLATE_MM,X=x=>x*s,Y=y=>y*s;
-  ctx.clearRect(0,0,N,N);
+  const N=cv.width,H=cv.height,s=N/PLATE_MM,X=x=>x*s,Y=y=>y*s;
+  ctx.clearRect(0,0,N,H);
   // brushed-steel plate: dark steel in dark mode (1:1 with the plate
   // editor), light steel in light mode. 3mm rounded corners.
-  const r=3*s; roundRect(0,0,N,N,r);
+  const r=3*s; roundRect(0,0,N,H,r);
   const steel=ctx.createLinearGradient(0,0,N,N);
   steel.addColorStop(0,css('--plate-a'));steel.addColorStop(.5,css('--plate-b'));steel.addColorStop(1,css('--plate-c'));
   ctx.fillStyle=steel;ctx.fill();
@@ -726,7 +768,7 @@ function draw(segs, grid, ghost){
   }else{
     // faint margin guide for the free-geometry modes
     ctx.strokeStyle=css('--grid');ctx.setLineDash([5,7]);ctx.lineWidth=1;
-    ctx.strokeRect(X(MARGIN_MM),Y(MARGIN_MM),(PLATE_MM-2*MARGIN_MM)*s,(PLATE_MM-2*MARGIN_MM)*s);
+    ctx.strokeRect(X(MARGIN_MM),Y(MARGIN_MM),(PLATE_MM-2*MARGIN_MM)*s,(PLATE_H_MM-2*MARGIN_MM)*s);
     ctx.setLineDash([]);
   }
   // selection: shaded cells from anchor to caret — the hidden textarea
@@ -832,7 +874,7 @@ function recompute(){
           // through to the neutral empty-preview branch — and must not
           // stay exportable through Copy/Download.
           if(!err&&window.studioCoreReport){
-            const rep=window.studioCoreReport(payload);
+            const rep=window.studioCoreReport(payload, PLATE.name);
             if(rep&&rep.error&&!rep.plan){err=rep.error.replace(/^curves: /,'');payload=null;}
           }
         }
@@ -843,12 +885,12 @@ function recompute(){
   }catch(e){err=String(e.message||e);segs=[];payload=null;}
   // empty Text plate: the 6.0mm grid typing starts on (with the ghost
   // placeholder); a too-large composition keeps the finest grid + error
-  const gridCtx=m==='text'?(tSize||(err?SH.sizes[SH.sizes.length-1]:SH.sizes[0])):null;
+  const gridCtx=m==='text'?(tSize||(err?PLATE.sizes[PLATE.sizes.length-1]:PLATE.sizes[0])):null;
   // When the cost model has loaded, draw the spline the device actually cuts
   // (planner-resampled, corner-clamped) rather than the raw input paths.
   let drawSegs=segs;
   if(sendKind==='path'&&payload&&window.studioCoreReport){
-    const rep=window.studioCoreReport(payload);
+    const rep=window.studioCoreReport(payload, PLATE.name);
     if(rep&&rep.plan){const pl=plannedToSegs(rep.plan);if(pl&&pl.length)drawSegs=pl;}
   }
   let ghost=null;
@@ -886,7 +928,7 @@ function textPlanReport(key,segs){
     // (studioCoreOnReady re-runs it) retries
     if(!window.studioCoreEncode||!window.studioCoreReport)return;
     let rep=null;
-    try{const p=encodePath(segs);rep=p?window.studioCoreReport(p):null;}catch(e){rep=null;}
+    try{const p=encodePath(segs);rep=p?window.studioCoreReport(p, PLATE.name):null;}catch(e){rep=null;}
     tgKey=key;tgReport=rep&&rep.seconds!=null?rep:null;
     recompute();
   },150);
@@ -898,13 +940,13 @@ function gauges(m,segs,err,tCols,tRows,tSize){
   // Firmware-exact cost from studio-core.wasm when it has loaded: real knot
   // caps and planned engraving time. Falls back to a JS estimate otherwise.
   let exact=null;
-  if(sendKind==='path'&&payload&&window.studioCoreReport){try{exact=window.studioCoreReport(payload);}catch(e){exact=null;}}
+  if(sendKind==='path'&&payload&&window.studioCoreReport){try{exact=window.studioCoreReport(payload, PLATE.name);}catch(e){exact=null;}}
   else if(m==='text')exact=textExact;
   const strokes=exact&&exact.strokes!=null?exact.strokes:segs.filter(s=>s.op==='M').length;
   const mins=exact&&exact.seconds!=null?exact.seconds/60:(pathLen(segs)/ENGRAVE_MM_S)/60;
   const capErr=exact?exact.error:'';
   document.getElementById('slowNote').hidden=!(exact&&exact.knots>20000&&!capErr);
-  const inPlate=!b.empty&&b.minX>=MARGIN_MM-1e-6&&b.minY>=MARGIN_MM-1e-6&&b.maxX<=PLATE_MM-MARGIN_MM+1e-6&&b.maxY<=PLATE_MM-MARGIN_MM+1e-6;
+  const inPlate=!b.empty&&b.minX>=MARGIN_MM-1e-6&&b.minY>=MARGIN_MM-1e-6&&b.maxX<=PLATE_MM-MARGIN_MM+1e-6&&b.maxY<=PLATE_H_MM-MARGIN_MM+1e-6;
   const set=(fill,val,label,cap)=>{const el=document.getElementById(fill);const pct=cap?Math.min(100,100*val/cap):0;
     el.style.width=pct+'%';el.classList.toggle('over',val>cap);
     document.getElementById(fill.replace('m','v'))&&(document.getElementById('v'+fill.slice(1)).textContent=label);};
@@ -946,7 +988,7 @@ function gauges(m,segs,err,tCols,tRows,tSize){
 // inline editor proved out, minus its open/close lifecycle: this one is
 // simply always live while the tab shows. The string-index ↔ grid-cell
 // maps are exact because the wrap is hard column chunking.
-let textGrid=SH.sizes[0],textCaret=null,textSel=null,caretShow=true,lastPlate=null,lastMM=null;
+let textGrid=PLATE.sizes[0],textCaret=null,textSel=null,caretShow=true,lastPlate=null,lastMM=null;
 function caretCell(value,idx,cols){
   let row=0;
   for(const line of value.split('\n')){
@@ -1031,7 +1073,7 @@ function pulseSizeChip(tSize){
   const plate=document.getElementById('plate');
   const plateCell=e=>{
     const r=plate.getBoundingClientRect();
-    const mmx=(e.clientX-r.left)/r.width*PLATE_MM,mmy=(e.clientY-r.top)/r.height*PLATE_MM;
+    const mmx=(e.clientX-r.left)/r.width*PLATE_MM,mmy=(e.clientY-r.top)/r.height*PLATE_H_MM;
     const row=Math.floor((mmy-MARGIN_MM)/textGrid.mm);
     const col=Math.round((mmx-MARGIN_MM)/(SH.advance/SH.height*textGrid.mm));
     return cellIndex(ta.value,row,Math.max(0,col),textGrid.cols);

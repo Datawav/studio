@@ -508,11 +508,12 @@ window.Canvas = (function () {
   // snap the object's centre and edges to the margins and the plate centre
   function snapMove(o) {
     gUI.querySelectorAll(".cvSnap").forEach(n => n.remove());
-    const T = 1.4, gx = [MARGIN_MM, PLATE_MM / 2, PLATE_MM - MARGIN_MM], he = halfExtent(o);
+    const T = 1.4, gx = [MARGIN_MM, PLATE_MM / 2, PLATE_MM - MARGIN_MM],
+      gy = [MARGIN_MM, PLATE_H_MM / 2, PLATE_H_MM - MARGIN_MM], he = halfExtent(o);
     const ex = he.hw * Math.abs(o.tf.sx || 1), ey = he.hh * Math.abs(o.tf.sy || 1);
     const ax = [o.tf.x - ex, o.tf.x, o.tf.x + ex], ay = [o.tf.y - ey, o.tf.y, o.tf.y + ey];
-    for (const g of gx) { let done = false; for (const a of ax) if (Math.abs(a - g) < T) { o.tf.x += g - a; gUI.appendChild(el("line", { x1: g, y1: 0, x2: g, y2: PLATE_MM, class: "cvSnap" })); done = true; break; } if (done) break; }
-    for (const g of gx) { let done = false; for (const a of ay) if (Math.abs(a - g) < T) { o.tf.y += g - a; gUI.appendChild(el("line", { x1: 0, y1: g, x2: PLATE_MM, y2: g, class: "cvSnap" })); done = true; break; } if (done) break; }
+    for (const g of gx) { let done = false; for (const a of ax) if (Math.abs(a - g) < T) { o.tf.x += g - a; gUI.appendChild(el("line", { x1: g, y1: 0, x2: g, y2: PLATE_H_MM, class: "cvSnap" })); done = true; break; } if (done) break; }
+    for (const g of gy) { let done = false; for (const a of ay) if (Math.abs(a - g) < T) { o.tf.y += g - a; gUI.appendChild(el("line", { x1: 0, y1: g, x2: PLATE_MM, y2: g, class: "cvSnap" })); done = true; break; } if (done) break; }
   }
   // move/scale/rotate the live SVG group cheaply, defer the heavy preview
   function liveTransform(o) {
@@ -608,16 +609,16 @@ window.Canvas = (function () {
   function insertSVG(text) {
     let segs; try { segs = extractSVG(text); } catch (e) { setStatus("SVG: " + (e.message || e)); return; }
     const b = bounds(segs); if (b.empty) return;
-    const sc = Math.max(b.w, b.h) > 0 ? FIT_MM / Math.max(b.w, b.h) : 1;
+    const sc = Math.max(b.w, b.h) > 0 ? Math.min(FIT_MM / Math.max(b.w, 1e-9), FIT_H_MM / Math.max(b.h, 1e-9)) : 1;
     const scaled = segs.map(s => mapSeg(s, ([x, y]) => [x * sc, y * sc]));
-    commitSnapshot(); addObject({ id: nextId(), type: "svg", tf: { x: PLATE_MM / 2, y: PLATE_MM / 2, sx: 1, sy: 1, rot: 0 }, segs: centered(scaled), eps: 0, raw: centered(scaled) });
+    commitSnapshot(); addObject({ id: nextId(), type: "svg", tf: { x: PLATE_MM / 2, y: PLATE_H_MM / 2, sx: 1, sy: 1, rot: 0 }, segs: centered(scaled), eps: 0, raw: centered(scaled) });
     const o = doc.objects[doc.objects.length - 1]; select(o.id); setTool("select"); render(); recomputeAll();
   }
   function insertTrace(segs) {
     const b = bounds(segs); if (b.empty) { setStatus("Trace found nothing"); return; }
-    const sc = Math.max(b.w, b.h) > 0 ? FIT_MM / Math.max(b.w, b.h) : 1;
+    const sc = Math.max(b.w, b.h) > 0 ? Math.min(FIT_MM / Math.max(b.w, 1e-9), FIT_H_MM / Math.max(b.h, 1e-9)) : 1;
     const scaled = centered(segs.map(s => mapSeg(s, ([x, y]) => [x * sc, y * sc])));
-    commitSnapshot(); addObject({ id: nextId(), type: "trace", tf: { x: PLATE_MM / 2, y: PLATE_MM / 2, sx: 1, sy: 1, rot: 0 }, segs: scaled, raw: scaled, eps: 0 });
+    commitSnapshot(); addObject({ id: nextId(), type: "trace", tf: { x: PLATE_MM / 2, y: PLATE_H_MM / 2, sx: 1, sy: 1, rot: 0 }, segs: scaled, raw: scaled, eps: 0 });
     const o = doc.objects[doc.objects.length - 1]; select(o.id); setTool("select"); render(); recomputeAll();
   }
 
