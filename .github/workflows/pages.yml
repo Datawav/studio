@@ -30,14 +30,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # Firmware commit the emulator AND the curves cost model (studio-core.wasm)
-      # are compiled against. Pinned (not `main`) so unrelated firmware edits
-      # never change the deployed wasm. Kept equal to glyphs-drift.yml's
-      # FIRMWARE_REF — one firmware version backs all of Studio; bump both
-      # together (and re-verify emu + core still build) when the gui or curves
-      # API they use changes. See emu/README.md.
+      # Firmware version the emulator AND the curves cost model
+      # (studio-core.wasm) are compiled against. A sync index, not a branch:
+      # one small number per firmware/Studio sync point, tagged on the
+      # firmware repo, so unrelated firmware edits never change the deployed
+      # wasm and the pin says at a glance which firmware the site runs.
+      # Kept equal to glyphs-drift.yml's FIRMWARE_REF — one firmware version
+      # backs all of Studio; bump both together, after rebuilding emu + core
+      # against the new firmware and re-running the glyph drift check. See
+      # emu/README.md.
       FIRMWARE_REPO: Gangleri42/seedhammer
-      FIRMWARE_REF: e684bbb46b7809848e99a0a9bed53442d9286645
+      FIRMWARE_REF: "0.1"
     steps:
       - uses: actions/checkout@v6
 

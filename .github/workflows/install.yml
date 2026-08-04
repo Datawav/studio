@@ -25,7 +25,7 @@ jobs:
       - name: Read the firmware pin from the Pages workflow
         id: pin
         run: |
-          ref=$(grep -oP 'FIRMWARE_REF:\s*\K[0-9a-f]{40}' .github/workflows/pages.yml)
+          ref=$(grep -oP 'FIRMWARE_REF:\s*"\K[0-9]+\.[0-9]+' .github/workflows/pages.yml)
           if [ -z "$ref" ]; then
             echo "no FIRMWARE_REF found in pages.yml" >&2
             exit 1

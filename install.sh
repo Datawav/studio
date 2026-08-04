@@ -101,11 +101,15 @@ cp emu/emu.wasm emu.wasm
 if ref=$(git -C "$FW" rev-parse HEAD 2>/dev/null); then
   dirty=
   [ -n "$(git -C "$FW" status --porcelain --untracked-files=no)" ] && dirty=+dirty
+  # The sync index the deployed site pins, when the build sits on one.
+  version=$(git -C "$FW" describe --tags --always 2>/dev/null || echo unknown)
 else
   ref=unknown-not-a-git-checkout
   dirty=
+  version=unknown
 fi
 cat > .wasm-provenance <<EOF
+firmware_version=$version$dirty
 firmware_ref=$ref$dirty
 go=$GO_ACTUAL
 built=$(date -u +%Y-%m-%dT%H:%M:%SZ)

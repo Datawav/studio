@@ -14,7 +14,9 @@ cp emu.wasm ..                         # the page serves the repo-root copy
 ```
 
 `emu.wasm` and `wasm_exec.js` are build outputs, never committed. The Pages
-workflow builds them from the firmware checkout pinned by `FIRMWARE_REF` and
+workflow builds them from the firmware checkout pinned by `FIRMWARE_REF` — a
+sync index like `0.1`, tagged on the firmware repo, one per firmware/Studio
+sync point — and
 stages `emu/emu.wasm` into the deployed site root; for a local run you must
 copy it to the repo root yourself (the page fetches `./emu.wasm`), or the tab
 keeps serving a stale build. `wasm_exec.js` must come from the same Go that
