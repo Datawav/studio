@@ -9,6 +9,9 @@
   const EXEC_URL = "wasm_exec.js";
 
   let state = "idle"; // idle | booting | ready | error
+  // A hotkey pressed before the device is up: the tap waits for the
+  // first frame, and outranks any composed plate queued behind it.
+  let pendingFixture = null;
   let canvas, ctx, statusEl;
   let firstFrame = false;
   let pending = null; // curves payload queued to tap once the device is up
@@ -124,7 +127,8 @@
   }
 
   function onFirstFrame() {
-    setStatus("Drag to navigate — it's a touch device. Use “Load composed plate” to tap in your design.");
+    setStatus("Drag to navigate — it's a touch device. Use “Load composed plate” to tap in your design, or press 1-7 for a demo wallet.");
+    if (pendingFixture != null) { const f = pendingFixture; pendingFixture = null; pending = null; f(); return; }
     if (pending != null) { doFeed(pending); pending = null; }
   }
 
@@ -161,5 +165,64 @@
   // feed: the explicit "Load composed plate" button — always re-taps.
   function feed(payload) { queueOrFeed(payload, true); }
 
-  window.SeedHammerEmu = { activate, feed, boot };
+  // Hotkeys 1-7 tap a canned payload in, exactly as a tag would: the
+  // demo wallets the emulator exists to show off, without a phone, a
+  // reader or a composed plate. Seeds and descriptors travel as Text
+  // records and the drawing as a curves record, the same two shapes the
+  // scanner sees on hardware. The seeds cosign the descriptors — quorum
+  // n uses the first n seeds — so 1 then 3 shows one wallet from both
+  // ends. Deliberately absurd words: nobody mistakes BACON BACON BACON
+  // for their own backup.
+  const HOTKEYS = {
+    "1": {label: "24-word BACON seed", text: () => F().seed24},
+    "2": {label: "12-word OIL seed", text: () => F().seed12},
+    "3": {label: "2-of-3 descriptor", text: () => F().desc2of3},
+    "4": {label: "3-of-5 descriptor", text: () => F().desc3of5},
+    "5": {label: "5-of-7 descriptor", text: () => F().desc5of7},
+    "6": {label: "SVG drawing", bytes: () => b64(F().drawingB64)},
+    "7": {label: "12-word RUG seed", text: () => F().seedRug},
+  };
+
+  function F() { return window.EmuFixtures || {}; }
+
+  function b64(s) {
+    const bin = atob(s);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  // tapFixture boots the emulator if it is cold, then taps. A cold boot
+  // has no device to tap yet, so the payload waits for the first frame
+  // the same way a composed plate does.
+  function tapFixture(key) {
+    const h = HOTKEYS[key];
+    if (!h || !window.NFCBus) return false;
+    const send = h.bytes
+      ? () => window.NFCBus.feedEmu(h.bytes())
+      : () => window.NFCBus.feedEmuText(h.text());
+    if (h.bytes ? !F().drawingB64 : !h.text()) return false;
+    if (state === "error") state = "idle";
+    if (state === "idle" || state === "booting") {
+      pendingFixture = send;
+      if (state === "idle") boot();
+      setStatus("Booting the device, then tapping in the " + h.label + "…");
+      return true;
+    }
+    send();
+    setStatus("Tapped in the " + h.label + " — the device reads it on its start screen.");
+    return true;
+  }
+
+  // Keys go to the device only while the SeedHammer tab is showing and
+  // nothing is being typed into, so the editors keep their own digits.
+  window.addEventListener("keydown", (e) => {
+    if (!HOTKEYS[e.key] || e.metaKey || e.ctrlKey || e.altKey) return;
+    const el = document.activeElement;
+    if (el && (el.isContentEditable || /^(input|textarea|select)$/i.test(el.tagName))) return;
+    if (!canvas || canvas.closest("[hidden]") || canvas.offsetParent === null) return;
+    if (tapFixture(e.key)) e.preventDefault();
+  });
+
+  window.SeedHammerEmu = { activate, feed, boot, tapFixture };
 })();

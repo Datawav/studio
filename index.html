@@ -407,6 +407,10 @@ to learn!</textarea><canvas id="plate" width="900" height="900"></canvas></div>
             to navigate — it's a touch device. <b>Load composed plate</b> taps whatever you
             designed on the Text or Canvas tabs into this emulator, exactly as a scanned
             NFC tag would. It never reaches a real machine — “Send” on the editor tabs does that.</p>
+          <p class="devhint">Or tap in a demo wallet with a number key, no tag needed:
+            <b>1</b> a 24-word seed, <b>2</b> a 12-word seed, then <b>3</b> 2-of-3,
+            <b>4</b> 3-of-5 and <b>5</b> 5-of-7 descriptors those same seeds cosign — so
+            1 then 3 is one wallet seen from both ends. The words are nonsense on purpose.</p>
           <div class="platePanel" id="emuPlate" hidden>
             <div class="plateHead"><span>Engraved plate (SVG)</span><button id="emuPlateDl">Download</button></div>
             <div class="plateSvg" id="emuPlateSvg"></div>
@@ -429,6 +433,7 @@ to learn!</textarea><canvas id="plate" width="900" height="900"></canvas></div>
 <div id="sandbox" style="position:absolute;left:-99999px;top:0;width:1000px;height:1000px;overflow:hidden" aria-hidden="true"></div>
 
 <script src="nfc-bus.js"></script>
+<script src="emu-fixtures.js"></script>
 <script src="emu.js"></script>
 <script src="tracer.js"></script>
 <script>

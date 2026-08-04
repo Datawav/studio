@@ -80,7 +80,7 @@ jobs:
           # the published site.
           cp index.html glyphs.js sw.js manifest.webmanifest \
              icon.svg icon-192.png icon-512.png icon-maskable.png \
-             nfc-bus.js emu.js canvas.js tracer.js studio-core.js dist/
+             nfc-bus.js emu.js emu-fixtures.js canvas.js tracer.js studio-core.js dist/
 
           # SeedHammer emulator wasm + the wasm_exec.js from the exact Go that
           # built it (they must match). Non-fatal: if the build above failed

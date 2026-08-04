@@ -1,6 +1,6 @@
 // SeedHammer Studio service worker: cache the app shell and the shared
 // font data so the tool works offline once installed.
-const CACHE = 'sh-studio-v28';
+const CACHE = 'sh-studio-v29';
 const SHELL = [
   './',
   './index.html',
@@ -11,6 +11,7 @@ const SHELL = [
   './glyphs.js',
   './nfc-bus.js',
   './emu.js',
+  './emu-fixtures.js',
   './canvas.js',
   './tracer.js',
   './studio-core.js',
