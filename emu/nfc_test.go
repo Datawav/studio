@@ -5,15 +5,15 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"flag"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
+	"seedhammer.com/bezier"
 	"seedhammer.com/curves"
 	"seedhammer.com/engrave"
+	"seedhammer.com/svgpath"
 )
 
 // gateParams mirrors the emulator's engraverParams (platform.go, js-tagged
@@ -69,10 +69,28 @@ func buildCurvesTap(payload []byte) []byte {
 
 // A path payload the editor's emit() would produce for a square drawn
 // inside the plate (10 mm … 75 mm), coordinates quantized at 100 units/mm.
-const pathPayload = "1 path 100 30\n" +
-	"M1000 1000 L7500 1000 L7500 7500 L1000 7500 L1000 1000"
+const textPayload = "2 text\nIN CASE OF EMERGENCY\nBREAK GLASS"
 
-const textPayload = "1 text\nIN CASE OF EMERGENCY\nBREAK GLASS"
+// pathPayloadBytes builds the reference v2 path payload — the same
+// 10-75mm square outline the v1 fixture carried — through the same
+// encoder the editor and the host converter use, so the fixture can
+// never drift from the wire format.
+func pathPayloadBytes(t testing.TB) []byte {
+	t.Helper()
+	pt := func(x, y int) bezier.Point { return bezier.Pt(x, y) }
+	segs := []svgpath.Segment{
+		{Op: svgpath.MoveTo, Args: [4]bezier.Point{pt(100, 100)}},
+		{Op: svgpath.LineTo, Args: [4]bezier.Point{pt(750, 100)}},
+		{Op: svgpath.LineTo, Args: [4]bezier.Point{pt(750, 750)}},
+		{Op: svgpath.LineTo, Args: [4]bezier.Point{pt(100, 750)}},
+		{Op: svgpath.LineTo, Args: [4]bezier.Point{pt(100, 100)}},
+	}
+	payload, err := curves.EncodePath(10, 3, segs)
+	if err != nil {
+		t.Fatalf("EncodePath: %v", err)
+	}
+	return payload
+}
 
 // TestCurvesTapRecognized is the correctness gate the whole hub hinges on:
 // a curves tap must be *recognized as curves* by the emulator's reader, not
@@ -80,7 +98,7 @@ const textPayload = "1 text\nIN CASE OF EMERGENCY\nBREAK GLASS"
 // hands gui (ndefReader over nfcReader), asserts the record type dispatches,
 // the payload round-trips, and the curves planner accepts it within caps.
 func TestCurvesTapRecognized(t *testing.T) {
-	tap := buildCurvesTap([]byte(pathPayload))
+	tap := buildCurvesTap(pathPayloadBytes(t))
 
 	nr := newNFCReader()
 	nr.tap(tap)
@@ -95,8 +113,8 @@ func TestCurvesTapRecognized(t *testing.T) {
 	if rt := string(r.RecordType()); rt != curves.RecordType {
 		t.Fatalf("record type = %q, want %q", rt, curves.RecordType)
 	}
-	if !bytes.Equal(got, []byte(pathPayload)) {
-		t.Fatalf("payload round-trip mismatch:\n got %q\nwant %q", got, pathPayload)
+	if !bytes.Equal(got, pathPayloadBytes(t)) {
+		t.Fatalf("payload round-trip mismatch: %d bytes", len(got))
 	}
 
 	// The scan funnel would now hand these bytes to the curves planner.
@@ -111,8 +129,10 @@ func TestCurvesTapRecognized(t *testing.T) {
 	if d.Strokes == 0 || d.Knots == 0 {
 		t.Fatalf("planned an empty drawing: %+v", d)
 	}
-	if d.Strokes > curves.MaxStrokes || d.Knots > curves.MaxKnots {
-		t.Fatalf("drawing exceeds caps: %+v", d)
+	// The structural caps retired firmware-side; the duration cap is
+	// the complexity gate.
+	if rep.Seconds > curves.MaxMinutes*60 {
+		t.Fatalf("drawing exceeds the duration cap: %+v", rep)
 	}
 	t.Logf("planned: strokes=%d knots=%d report=%+v", d.Strokes, d.Knots, rep)
 }
@@ -150,28 +170,31 @@ func TestTextTapRoundTrips(t *testing.T) {
 // 2-byte length). The Studio Rich tab produces payloads in the tens of KB, so
 // this size is the common case, not an edge one.
 func TestLongCurvesTap(t *testing.T) {
-	var b strings.Builder
-	b.WriteString("1 path 100 30\nM1000 1000")
+	pt := func(x, y int) bezier.Point { return bezier.Pt(x, y) }
+	segs := []svgpath.Segment{{Op: svgpath.MoveTo, Args: [4]bezier.Point{pt(100, 100)}}}
 	for i := 0; i < 400; i++ { // ~400 line segments → several KB, well past 255
-		fmt.Fprintf(&b, " L%d %d", 1000+(i%50)*100, 1000+(i%40)*100)
+		segs = append(segs, svgpath.Segment{Op: svgpath.LineTo, Args: [4]bezier.Point{pt(100+(i%50)*10, 100+(i%40)*10)}})
 	}
-	payload := b.String()
+	payload, err := curves.EncodePath(10, 3, segs)
+	if err != nil {
+		t.Fatalf("EncodePath: %v", err)
+	}
 	if len(payload) < 256 {
 		t.Fatalf("payload not long enough to test the long-record path: %d", len(payload))
 	}
-	tap := buildCurvesTap([]byte(payload))
+	tap := buildCurvesTap(payload)
 
 	nr := newNFCReader()
 	nr.tap(tap)
 	r := &ndefReader{nfc: nr}
-	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read long tap: %v", err)
+	got, rerr := io.ReadAll(r)
+	if rerr != nil {
+		t.Fatalf("read long tap: %v", rerr)
 	}
 	if rt := string(r.RecordType()); rt != curves.RecordType {
 		t.Fatalf("long record type = %q, want %q", rt, curves.RecordType)
 	}
-	if string(got) != payload {
+	if !bytes.Equal(got, payload) {
 		t.Fatalf("long payload round-trip mismatch (%d vs %d bytes)", len(got), len(payload))
 	}
 	if _, err := curves.Parse(got, gateParams); err != nil {
@@ -190,16 +213,16 @@ var updateGolden = flag.Bool("update", false, "rewrite the golden tap fixtures")
 // parity checks then validate against. `-update` rewrites them.
 func TestGoldenTaps(t *testing.T) {
 	dir := "testdata"
-	fixtures := map[string]string{
-		"tap_path.hex": pathPayload,
-		"tap_text.hex": textPayload,
+	fixtures := map[string][]byte{
+		"tap_path.hex": pathPayloadBytes(t),
+		"tap_text.hex": []byte(textPayload),
 	}
 	if *updateGolden {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		for name, p := range fixtures {
-			b := hex.EncodeToString(buildCurvesTap([]byte(p))) + "\n"
+			b := hex.EncodeToString(buildCurvesTap(p)) + "\n"
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(b), 0o644); err != nil {
 				t.Fatal(err)
 			}
