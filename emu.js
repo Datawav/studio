@@ -181,6 +181,7 @@
     "5": {label: "5-of-7 descriptor", text: () => F().desc5of7},
     "6": {label: "SVG drawing", bytes: () => b64(F().drawingB64)},
     "7": {label: "12-word RUG seed", text: () => F().seedRug},
+    "8": {label: "the Coldcard memorial", text: () => F().seedMemorial},
   };
 
   function F() { return window.EmuFixtures || {}; }
