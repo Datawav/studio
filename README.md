@@ -5,9 +5,10 @@ Two static web apps for composing plates and sending them to a SeedHammer II.
 - **Studio** (the editor) — site root: <https://gangleri42.github.io/studio/>
   Compose plates on a WYSIWYG canvas (text with inline styling, shapes,
   imported SVGs, traced images) or as a firmware-font text plate, preview the
-  exact engraving, and send it over NFC. Installable as a PWA.
+  exact engraving, and send it over NFC. One toggle targets the square
+  85 × 85 mm or the small 85 × 55 mm plate. Installable as a PWA.
 - **Text composer** — <https://gangleri42.github.io/studio/textplate/>
-  A minimal plain-text plate composer.
+  A minimal plain-text plate composer for the square plate.
 
 ## What you need
 
