@@ -722,7 +722,7 @@ function mmPath(segs){const f=v=>+v.toFixed(4);let s='';
   return s.trimEnd();}
 function encodePath(segs){
   if(segs.length&&window.studioCoreEncode){
-    const r=window.studioCoreEncode(mmPath(segs));
+    const r=window.studioCoreEncode(mmPath(segs), PLATE.name);
     if(r&&!r.error&&r.payload)return r.payload;}
   return null;}
 // Grouped emit: placed shapes ({at, segs} in mm, segs local to at) keep
@@ -734,7 +734,7 @@ function encodeGroups(groups){
   if(groups.length&&window.studioCoreEncodeGroups){
     const f=v=>+v.toFixed(4);
     const arg=JSON.stringify(groups.map(g=>({at:[f(g.at[0]),f(g.at[1])],d:mmPath(g.segs)})));
-    const r=window.studioCoreEncodeGroups(arg);
+    const r=window.studioCoreEncodeGroups(arg, PLATE.name);
     if(r&&!r.error&&r.payload)return r.payload;}
   const flat=[];
   for(const g of groups)for(const s of g.segs)flat.push(mapSeg(s,([x,y])=>[g.at[0]+x,g.at[1]+y]));
@@ -830,7 +830,7 @@ function recompute(){
       // text sends the cheap text envelope, not the vector path; the
       // firmware wraps overlong lines itself, so the payload stays the
       // composition and only the verdict and preview mirror the wrap
-      sendKind='text'; payload=new TextEncoder().encode(`${SH.version} text\n`+lines.join('\n'));
+      sendKind='text'; payload=new TextEncoder().encode(`${SH.version} text ${PLATE.name}\n`+lines.join('\n'));
       textExact=tSize&&segs.length?textPlanReport(tSize.mm+'|'+lines.join('\n'),segs):null;
       const wrap=tSize?wrappedRows(lines,tSize):0;
       let hintTxt='';
@@ -865,7 +865,7 @@ function recompute(){
       sendKind='path'; payload=null;
       const hint=document.getElementById('richHint');
       if(window.studioCoreEncodeMarkdown){
-        const r=window.studioCoreEncodeMarkdown(md,bodyMM);
+        const r=window.studioCoreEncodeMarkdown(md,bodyMM,PLATE.name);
         if(r.error)err=r.error;
         else{
           payload=r.payload;if(r.warning)err=r.warning;

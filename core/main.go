@@ -152,6 +152,9 @@ func encode(this js.Value, args []js.Value) any {
 	}
 	segs = curves.Order(segs)
 	payload, err := curves.EncodePath(encodeUPMM, encodeStroke, segs)
+	if err == nil {
+		payload, err = stampPlate(payload, args, 1)
+	}
 	if err != nil {
 		return js.ValueOf(map[string]any{"error": err.Error()})
 	}
@@ -215,6 +218,9 @@ func encodeGroups(this js.Value, args []js.Value) any {
 		groups = curves.OrderGroups(groups)
 	}
 	payload, err := curves.EncodeGroups(encodeUPMM, encodeStroke, groups)
+	if err == nil {
+		payload, err = stampPlate(payload, args, 1)
+	}
 	if err != nil {
 		return js.ValueOf(map[string]any{"error": err.Error()})
 	}
@@ -259,12 +265,29 @@ func encodeMarkdown(this js.Value, args []js.Value) any {
 		cg = curves.OrderGroups(cg)
 	}
 	payload, err := curves.EncodeGroups(encodeUPMM, encodeStroke, cg)
+	if err == nil {
+		payload, err = stampPlate(payload, args, 2)
+	}
 	if err != nil {
 		return js.ValueOf(map[string]any{"error": err.Error()})
 	}
 	arr := js.Global().Get("Uint8Array").New(len(payload))
 	js.CopyBytesToJS(arr, payload)
 	return js.ValueOf(map[string]any{"payload": arr, "error": "", "warning": warning})
+}
+
+// stampPlate applies an optional plate-name argument to a finished
+// payload, so the editor's toggle rides the wire and the device
+// engraves that plate without asking.
+func stampPlate(payload []byte, args []js.Value, idx int) ([]byte, error) {
+	if len(args) <= idx {
+		return payload, nil
+	}
+	plate := args[idx].String()
+	if plate == "" {
+		return payload, nil
+	}
+	return curves.WithPlate(payload, plate)
 }
 
 // argBytes reads a JS payload argument, whether a string (a text payload
