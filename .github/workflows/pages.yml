@@ -78,7 +78,7 @@ jobs:
           # SeedHammer Studio editor at the site root. Only the named app
           # files ship — repo meta (README, workflows, .gitignore) stays off
           # the published site.
-          cp index.html glyphs.js sw.js manifest.webmanifest \
+          cp index.html machine.html glyphs.js sw.js manifest.webmanifest \
              icon.svg icon-192.png icon-512.png icon-maskable.png \
              nfc-bus.js emu.js emu-fixtures.js canvas.js tracer.js studio-core.js dist/
 

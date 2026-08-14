@@ -19,7 +19,7 @@ done
 
 rm -rf dist
 mkdir -p dist/textplate
-cp index.html glyphs.js sw.js manifest.webmanifest \
+cp index.html machine.html glyphs.js sw.js manifest.webmanifest \
    icon.svg icon-192.png icon-512.png icon-maskable.png \
    nfc-bus.js emu.js emu-fixtures.js canvas.js tracer.js studio-core.js dist/
 cp emu/emu.wasm emu/wasm_exec.js studio-core.wasm dist/
