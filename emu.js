@@ -182,6 +182,7 @@
     "6": {bytes: () => b64(F().drawingB64)},
     "7": {text: () => F().seedRug},
     "8": {text: () => F().seedMemorial},
+    "9": {label: "rug seed as a SeedQR", text: () => F().seedQR},
   };
 
   function F() { return window.EmuFixtures || {}; }
