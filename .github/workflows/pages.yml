@@ -40,7 +40,7 @@ jobs:
       # against the new firmware and re-running the glyph drift check. See
       # emu/README.md.
       FIRMWARE_REPO: Gangleri42/seedhammer
-      FIRMWARE_REF: "0.7"
+      FIRMWARE_REF: "0.81"
     steps:
       - uses: actions/checkout@v6
 
