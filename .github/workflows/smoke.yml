@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Read the firmware pin from the Pages workflow
         id: pin
@@ -46,13 +46,13 @@ jobs:
           echo "firmware pinned at $ref"
 
       - name: Check out firmware at that commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: Gangleri42/seedhammer
           ref: ${{ steps.pin.outputs.ref }}
           path: _firmware
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: _firmware/go.mod
 

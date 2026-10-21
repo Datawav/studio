@@ -42,16 +42,16 @@ jobs:
       FIRMWARE_REF: "0.81"
     steps:
       - name: Check out Studio (committed glyphs.js)
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Check out firmware at the pinned commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: ${{ env.FIRMWARE_REPO }}
           ref: ${{ env.FIRMWARE_REF }}
           path: firmware
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: firmware/go.mod
 
