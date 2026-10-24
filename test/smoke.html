@@ -69,6 +69,31 @@ async function run() {
     }
     await new Promise(r => setTimeout(r, 100));
   }
+  // Imported SVG must never run in the editor's origin, even when
+  // malformed geometry takes the error path. Use synthetic markers only.
+  w.__svgImportExecuted = false;
+  const hostile = `<svg xmlns="http://www.w3.org/2000/svg" onload="parent.__svgImportExecuted=true">
+    <foreignObject><img xmlns="http://www.w3.org/1999/xhtml" src="/svg-test-missing" onerror="parent.__svgImportExecuted=true"/></foreignObject>
+    <use href="#absent"/>
+  </svg>`;
+  let rejected = false;
+  try { w.extractSVG(hostile); } catch (e) { rejected = true; }
+  await new Promise(r => setTimeout(r, 100));
+  let security = check('invalid imported SVG rejected', rejected, true);
+  security &= check('imported handlers never execute', w.__svgImportExecuted, false);
+  security &= check('failed import releases its isolated document',
+    w.document.getElementById('sandbox').childElementCount, 0);
+  const styled = w.extractSVG(`<svg xmlns="http://www.w3.org/2000/svg">
+    <style>.hidden { display:none }</style>
+    <rect class="hidden" width="20" height="20"/>
+    <g transform="translate(3 4)"><path d="M0 0 L2 1"/></g>
+  </svg>`);
+  security &= check('isolated SVG retains styles and transforms',
+    styled, [{op:'M',p:[[3,4]]},{op:'L',p:[[5,5]]}],
+    (got, want) => JSON.stringify(got) === JSON.stringify(want));
+  security &= check('successful import releases its isolated document',
+    w.document.getElementById('sandbox').childElementCount, 0);
+
   const svg = await (await fetch('fixtures/stamped.svg')).text();
 
   w.document.getElementById('cvClear').click();
@@ -101,7 +126,7 @@ async function run() {
   })()`);
   if (m.failed) throw new Error(m.failed);
 
-  let pass = true;
+  let pass = !!security;
   // Every stamp reaches the canvas, and the <defs> template does not.
   pass &= check('outlines', m.outlines, OUTLINES);
   pass &= check('strokes', m.strokes, OUTLINES);

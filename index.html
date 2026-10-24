@@ -582,7 +582,7 @@ function expandUses(svg){
       if(!ref.startsWith('#'))throw`<use> href ${ref||'(missing)'} is not a reference to an id in this document`;
       const target=svg.querySelector(`[id="${CSS.escape(ref.slice(1))}"]`);
       if(!target)throw`<use> references unknown id ${ref}`;
-      const g=document.createElementNS('http://www.w3.org/2000/svg','g');
+      const g=svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg','g');
       const t=u.getAttribute('transform'), x=u.getAttribute('x')||0, y=u.getAttribute('y')||0;
       g.setAttribute('transform',`${t?t+' ':''}translate(${+x},${+y})`);
       const tag=target.tagName.toLowerCase();
@@ -594,19 +594,42 @@ function expandUses(svg){
   throw`<use> nested past ${MAX_USE_DEPTH} levels, or referencing itself`;
 }
 function extractSVG(text){
-  const box=document.getElementById('sandbox'); box.innerHTML=text;
-  const svg=box.querySelector('svg'); if(!svg)throw'no <svg> element';
-  const out=[];
-  expandUses(svg);
-  for(const t of svg.querySelectorAll(SVG_TEMPLATES))t.remove();
-  for(const el of svg.querySelectorAll('path,rect,circle,ellipse,line,polyline,polygon')){
-    const st=getComputedStyle(el); if(st.display==='none'||st.visibility==='hidden')continue;
-    const m=el.getCTM?el.getCTM():null; if(!m)continue;
-    const ap=([x,y])=>[m.a*x+m.c*y+m.e,m.b*x+m.d*y+m.f];
-    for(const s of shape(el))out.push(mapSeg(s,ap));
+  // Imported SVG is untrusted markup, not part of Studio's document.
+  // Parse it inertly, then measure it in a script-disabled frame whose
+  // CSP blocks external resources. Keeping the frame same-origin lets
+  // getCTM/getComputedStyle preserve normal SVG layout without granting
+  // imported handlers access to the editor or its saved documents.
+  const parsed=new DOMParser().parseFromString(text,'image/svg+xml');
+  const root=parsed.documentElement;
+  if(parsed.querySelector('parsererror')||root.localName!=='svg'||root.namespaceURI!=='http://www.w3.org/2000/svg')throw'no valid <svg> element';
+  // HTML embedded in SVG is not engraved geometry. Exclude it before
+  // attaching the SVG, including navigation-capable HTML meta elements.
+  for(const el of root.querySelectorAll('*')){
+    if(el.namespaceURI!=='http://www.w3.org/2000/svg'||el.localName==='foreignObject'||el.localName==='script')el.remove();
   }
-  box.innerHTML=''; if(!out.length)throw'no visible geometry';
-  return out;
+  const frame=document.createElement('iframe');
+  frame.setAttribute('sandbox','allow-same-origin');
+  frame.setAttribute('aria-hidden','true');
+  frame.style.cssText='width:1000px;height:1000px;border:0';
+  document.getElementById('sandbox').appendChild(frame);
+  try{
+    const doc=frame.contentDocument;
+    doc.open();
+    doc.write(`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><body style="margin:0">`);
+    doc.close();
+    const svg=doc.importNode(root,true);doc.body.appendChild(svg);
+    const out=[];
+    expandUses(svg);
+    for(const t of svg.querySelectorAll(SVG_TEMPLATES))t.remove();
+    for(const el of svg.querySelectorAll('path,rect,circle,ellipse,line,polyline,polygon')){
+      const st=frame.contentWindow.getComputedStyle(el); if(st.display==='none'||st.visibility==='hidden')continue;
+      const m=el.getCTM?el.getCTM():null; if(!m)continue;
+      const ap=([x,y])=>[m.a*x+m.c*y+m.e,m.b*x+m.d*y+m.f];
+      for(const s of shape(el))out.push(mapSeg(s,ap));
+    }
+    if(!out.length)throw'no visible geometry';
+    return out;
+  }finally{frame.remove();}
 }
 function shape(el){const a=n=>parseFloat(el.getAttribute(n)||'0');
   switch(el.tagName.toLowerCase()){
